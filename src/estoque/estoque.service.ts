@@ -1,0 +1,488 @@
+import { Injectable } from '@nestjs/common';
+
+import { StatusVenda } from '@prisma/client';
+
+import { PrismaService } from '../prisma/prisma.service';
+
+@Injectable()
+export class EstoqueService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  ////////////////////////////////////////////////////////////
+  // RESUMO ESTOQUE
+  ////////////////////////////////////////////////////////////
+
+  async getResumoEstoque() {
+    ////////////////////////////////////////////////////////////
+    // AGGREGATES
+    ////////////////////////////////////////////////////////////
+
+    const [comprasAgg, vendasAgg, comprasRecentes, vendasRecentes] =
+      await Promise.all([
+        //////////////////////////////////////////////////////////
+        // COMPRAS
+        //////////////////////////////////////////////////////////
+
+        this.prisma.compra.aggregate({
+          _sum: {
+            //////////////////////////////////////////////////////
+            // ESTOQUE REAL
+            //////////////////////////////////////////////////////
+
+            kgBruto: true,
+
+            //////////////////////////////////////////////////////
+            // OPERACIONAL
+            //////////////////////////////////////////////////////
+
+            kgLiquido: true,
+
+            //////////////////////////////////////////////////////
+            // FINANCEIRO
+            //////////////////////////////////////////////////////
+
+            valorTotal: true,
+
+            //////////////////////////////////////////////////////
+            // FRUTAS
+            //////////////////////////////////////////////////////
+
+            quantidadeFrutas: true,
+
+            mediaFruta: true,
+          },
+
+          _count: true,
+        }),
+
+        //////////////////////////////////////////////////////////
+        // VENDAS
+        //////////////////////////////////////////////////////////
+
+        this.prisma.venda.aggregate({
+          where: {
+            status: {
+              not: StatusVenda.CANCELADA,
+            },
+          },
+
+          _sum: {
+            //////////////////////////////////////////////////////
+            // ESTOQUE REAL
+            //////////////////////////////////////////////////////
+
+            pesoBruto: true,
+
+            //////////////////////////////////////////////////////
+            // OPERACIONAL
+            //////////////////////////////////////////////////////
+
+            pesoLiquido: true,
+
+            //////////////////////////////////////////////////////
+            // FINANCEIRO
+            //////////////////////////////////////////////////////
+
+            valorTotal: true,
+
+            //////////////////////////////////////////////////////
+            // FRUTAS
+            //////////////////////////////////////////////////////
+
+            quantidadeFrutas: true,
+          },
+
+          _count: true,
+        }),
+
+        //////////////////////////////////////////////////////////
+        // COMPRAS RECENTES
+        //////////////////////////////////////////////////////////
+
+        this.prisma.compra.findMany({
+          take: 20,
+
+          include: {
+            cliente: true,
+            fornecedor: true,
+          },
+
+          orderBy: {
+            dataCompra: 'desc',
+          },
+        }),
+
+        //////////////////////////////////////////////////////////
+        // VENDAS RECENTES
+        //////////////////////////////////////////////////////////
+
+        this.prisma.venda.findMany({
+          where: {
+            status: {
+              not: StatusVenda.CANCELADA,
+            },
+          },
+
+          take: 20,
+
+          include: {
+            cliente: true,
+          },
+
+          orderBy: {
+            dataVenda: 'desc',
+          },
+        }),
+      ]);
+
+    ////////////////////////////////////////////////////////////
+    // COMPRAS
+    ////////////////////////////////////////////////////////////
+
+    const totalKgComprado = Number(comprasAgg._sum.kgBruto ?? 0);
+
+    const totalKgLiquidoComprado = Number(comprasAgg._sum.kgLiquido ?? 0);
+
+    const valorComprado = Number(comprasAgg._sum.valorTotal ?? 0);
+
+    const totalFrutasCompradas = Number(comprasAgg._sum.quantidadeFrutas ?? 0);
+
+    ////////////////////////////////////////////////////////////
+    // MÉDIA OPERACIONAL
+    ////////////////////////////////////////////////////////////
+
+    const mediaFrutaGeral =
+      comprasAgg._count > 0
+        ? Number(comprasAgg._sum.mediaFruta ?? 0) / comprasAgg._count
+        : 0;
+
+    ////////////////////////////////////////////////////////////
+    // VENDAS
+    ////////////////////////////////////////////////////////////
+
+    const totalKgVendido = Number(vendasAgg._sum.pesoBruto ?? 0);
+
+    const totalKgLiquidoVendido = Number(vendasAgg._sum.pesoLiquido ?? 0);
+
+    const valorVendido = Number(vendasAgg._sum.valorTotal ?? 0);
+
+    const totalFrutasVendidas = Number(vendasAgg._sum.quantidadeFrutas ?? 0);
+
+    ////////////////////////////////////////////////////////////
+    // ESTOQUE REAL
+    ////////////////////////////////////////////////////////////
+
+    const estoqueDisponivelKg = totalKgComprado - totalKgVendido;
+
+    ////////////////////////////////////////////////////////////
+    // TIMELINE COMPRAS
+    ////////////////////////////////////////////////////////////
+
+    const timelineCompras = comprasRecentes.map((compra) => ({
+      id: compra.id,
+
+      tipo: 'ENTRADA' as const,
+
+      //////////////////////////////////////////////////////
+      // CLIENTE
+      //////////////////////////////////////////////////////
+
+      cliente:
+        compra.cliente?.nome ?? compra.fornecedor?.nome ?? 'Sem identificação',
+
+      //////////////////////////////////////////////////////
+      // IDENTIFICAÇÃO
+      //////////////////////////////////////////////////////
+
+      safra: compra.safra,
+
+      modeloCaminhao: compra.modeloCaminhao,
+
+      placa: compra.placa,
+
+      numeroFolha: compra.numeroFolha,
+
+      //////////////////////////////////////////////////////
+      // PESAGEM
+      //////////////////////////////////////////////////////
+
+      // ================================================
+      // ESTOQUE
+      // ================================================
+
+      kgBruto: Number(compra.kgBruto),
+
+      // ================================================
+      // OPERACIONAL
+      // ================================================
+
+      kgLiquido: Number(compra.kgLiquido),
+
+      kgDescontado: Number(compra.kgDescontado),
+
+      quantidadeFrutas: compra.quantidadeFrutas,
+
+      mediaFruta: Number(compra.mediaFruta),
+
+      //////////////////////////////////////////////////////
+      // FINANCEIRO
+      //////////////////////////////////////////////////////
+
+      precoKg: Number(compra.precoKg),
+
+      totalBruto: Number(compra.totalBruto),
+
+      despesas: Number(compra.despesas),
+
+      valor: Number(compra.valorTotal),
+
+      //////////////////////////////////////////////////////
+      // DATA
+      //////////////////////////////////////////////////////
+
+      data: compra.dataCompra,
+    }));
+
+    ////////////////////////////////////////////////////////////
+    // TIMELINE VENDAS
+    ////////////////////////////////////////////////////////////
+
+    const timelineVendas = vendasRecentes.map((venda) => ({
+      id: venda.id,
+
+      tipo: 'SAIDA' as const,
+
+      //////////////////////////////////////////////////////
+      // CLIENTE
+      //////////////////////////////////////////////////////
+
+      cliente: venda.cliente.nome,
+
+      //////////////////////////////////////////////////////
+      // PEDIDO
+      //////////////////////////////////////////////////////
+
+      numeroPedido: venda.numeroPedido,
+
+      //////////////////////////////////////////////////////
+      // PESAGEM
+      //////////////////////////////////////////////////////
+
+      // ================================================
+      // ESTOQUE
+      // ================================================
+
+      pesoBruto: Number(venda.pesoBruto),
+
+      // ================================================
+      // OPERACIONAL
+      // ================================================
+
+      pesoLiquido: Number(venda.pesoLiquido),
+
+      pesoDesconto: Number(venda.pesoDesconto),
+
+      quantidadeFrutas: venda.quantidadeFrutas,
+
+      mediaFruta: venda.mediaFruta,
+
+      //////////////////////////////////////////////////////
+      // FINANCEIRO
+      //////////////////////////////////////////////////////
+
+      precoMelancia: Number(venda.precoMelancia),
+
+      valorMelancia: Number(venda.valorMelancia),
+
+      freteTotal: Number(venda.freteTotal ?? 0),
+
+      valor: Number(venda.valorTotal),
+
+      //////////////////////////////////////////////////////
+      // STATUS
+      //////////////////////////////////////////////////////
+
+      status: venda.status,
+
+      statusPagamento: venda.statusPagamento,
+
+      //////////////////////////////////////////////////////
+      // DATA
+      //////////////////////////////////////////////////////
+
+      data: venda.dataVenda,
+    }));
+
+    ////////////////////////////////////////////////////////////
+    // TIMELINE FINAL
+    ////////////////////////////////////////////////////////////
+
+    const timeline = [...timelineCompras, ...timelineVendas]
+      .sort((a, b) => {
+        return b.data.getTime() - a.data.getTime();
+      })
+      .slice(0, 30);
+
+    ////////////////////////////////////////////////////////////
+    // RESPONSE
+    ////////////////////////////////////////////////////////////
+
+    return {
+      //////////////////////////////////////////////////////////
+      // ESTOQUE REAL
+      //////////////////////////////////////////////////////////
+
+      totalKgComprado,
+
+      totalKgVendido,
+
+      estoqueDisponivelKg,
+
+      //////////////////////////////////////////////////////////
+      // OPERACIONAL
+      //////////////////////////////////////////////////////////
+
+      totalKgLiquidoComprado,
+
+      totalKgLiquidoVendido,
+
+      //////////////////////////////////////////////////////////
+      // FRUTAS
+      //////////////////////////////////////////////////////////
+
+      totalFrutasCompradas,
+
+      totalFrutasVendidas,
+
+      mediaFrutaGeral,
+
+      //////////////////////////////////////////////////////////
+      // FINANCEIRO
+      //////////////////////////////////////////////////////////
+
+      valorComprado,
+
+      valorVendido,
+
+      lucro: valorVendido - valorComprado,
+
+      //////////////////////////////////////////////////////////
+      // CONTADORES
+      //////////////////////////////////////////////////////////
+
+      totalCompras: comprasAgg._count,
+
+      totalVendas: vendasAgg._count,
+
+      //////////////////////////////////////////////////////////
+      // TIMELINE
+      //////////////////////////////////////////////////////////
+
+      timeline,
+    };
+  }
+
+  ////////////////////////////////////////////////////////////
+  // MOVIMENTAÇÕES
+  ////////////////////////////////////////////////////////////
+
+  async movimentacoes() {
+    const [compras, vendas] = await Promise.all([
+      //////////////////////////////////////////////////////////
+      // COMPRAS
+      //////////////////////////////////////////////////////////
+
+      this.prisma.compra.findMany({
+        include: {
+          cliente: true,
+
+          fornecedor: true,
+        },
+
+        orderBy: {
+          dataCompra: 'desc',
+        },
+
+        take: 100,
+      }),
+
+      //////////////////////////////////////////////////////////
+      // VENDAS
+      //////////////////////////////////////////////////////////
+
+      this.prisma.venda.findMany({
+        where: {
+          status: {
+            not: StatusVenda.CANCELADA,
+          },
+        },
+
+        include: {
+          cliente: true,
+        },
+
+        orderBy: {
+          dataVenda: 'desc',
+        },
+
+        take: 100,
+      }),
+    ]);
+
+    return {
+      compras,
+
+      vendas,
+    };
+  }
+
+  ////////////////////////////////////////////////////////////
+  // HISTÓRICO
+  ////////////////////////////////////////////////////////////
+
+  async historicoCompleto() {
+    ////////////////////////////////////////////////////////////
+    // COMPRAS
+    ////////////////////////////////////////////////////////////
+
+    const compras = await this.prisma.compra.findMany({
+      include: {
+        cliente: true,
+      },
+
+      orderBy: {
+        dataCompra: 'desc',
+      },
+    });
+
+    ////////////////////////////////////////////////////////////
+    // VENDAS
+    ////////////////////////////////////////////////////////////
+
+    const vendas = await this.prisma.venda.findMany({
+      where: {
+        status: {
+          not: StatusVenda.CANCELADA,
+        },
+      },
+
+      include: {
+        cliente: true,
+      },
+
+      orderBy: {
+        dataVenda: 'desc',
+      },
+    });
+
+    ////////////////////////////////////////////////////////////
+    // RESPONSE
+    ////////////////////////////////////////////////////////////
+
+    return {
+      compras,
+
+      vendas,
+    };
+  }
+}

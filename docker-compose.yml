@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: melancias_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: melancias
+      POSTGRES_PASSWORD: melancias
+      POSTGRES_DB: melancias_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - melancias_pgdata:/var/lib/postgresql/data
+
+volumes:
+  melancias_pgdata:

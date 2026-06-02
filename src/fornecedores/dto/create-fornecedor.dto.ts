@@ -1,0 +1,87 @@
+import {
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
+
+export class CreateFornecedorDto {
+  //////////////////////////////////////////////////
+  // NOME
+  //////////////////////////////////////////////////
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(150)
+  nome!: string;
+
+  //////////////////////////////////////////////////
+  // SOBRENOME
+  //////////////////////////////////////////////////
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  sobrenome?: string;
+
+  //////////////////////////////////////////////////
+  // TELEFONE
+  //////////////////////////////////////////////////
+
+  /**
+   * Aceita:
+   * 64999999999
+   * (64)99999-9999
+   * +55 64 99999-9999
+   */
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(25)
+  @Matches(/^[0-9()+\-\s]+$/, {
+    message: 'Telefone inválido',
+  })
+  telefone?: string;
+
+  //////////////////////////////////////////////////
+  // ESTADO (UF)
+  //////////////////////////////////////////////////
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  estado?: string;
+
+  //////////////////////////////////////////////////
+  // LIMITE FINANCEIRO
+  //////////////////////////////////////////////////
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  limiteFinanceiroValor?: number;
+
+  //////////////////////////////////////////////////
+  // PRAZO LIMITE (DIAS)
+  //////////////////////////////////////////////////
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(3650)
+  limiteFinanceiroDias?: number;
+
+  //////////////////////////////////////////////////
+  // OBSERVAÇÕES
+  //////////////////////////////////////////////////
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  observacoes?: string;
+}
