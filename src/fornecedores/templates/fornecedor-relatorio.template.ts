@@ -224,6 +224,7 @@ function tableCell(
 
 export function buildFornecedorRelatorioTemplate(
   data: FornecedorRelatorioData,
+  usuarioNome: string,
 ): TDocumentDefinitions {
   ////////////////////////////////////////////////////////////
   // LOGO
@@ -429,13 +430,13 @@ export function buildFornecedorRelatorioTemplate(
       },
     },
 
-    //////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////
     // RESUMO FINANCEIRO
-    //////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////
 
     {
       table: {
-        widths: ['16.6%', '16.6%', '16.6%', '16.6%', '16.6%', '16.6%'],
+        widths: ['33.3%', '33.3%', '33.3%'],
 
         body: [
           [
@@ -498,66 +499,6 @@ export function buildFornecedorRelatorioTemplate(
 
               margin: [12, 12, 12, 12],
             },
-
-            {
-              stack: [
-                cardTitle('LIMITE'),
-
-                {
-                  text: money(data.resumo.limiteFinanceiro),
-
-                  bold: true,
-
-                  fontSize: 16,
-
-                  color: COLORS.primary,
-                },
-              ],
-
-              fillColor: COLORS.primarySoft,
-
-              margin: [12, 12, 12, 12],
-            },
-
-            {
-              stack: [
-                cardTitle('UTILIZAÇÃO'),
-
-                {
-                  text: `${numberBR(data.resumo.percentualLimite)}%`,
-
-                  bold: true,
-
-                  fontSize: 16,
-
-                  color: COLORS.primary,
-                },
-              ],
-
-              fillColor: COLORS.primarySoft,
-
-              margin: [12, 12, 12, 12],
-            },
-
-            {
-              stack: [
-                cardTitle('ALERTAS'),
-
-                {
-                  text: String(data.resumo.alertasAtivos),
-
-                  bold: true,
-
-                  fontSize: 16,
-
-                  color: COLORS.danger,
-                },
-              ],
-
-              fillColor: COLORS.primarySoft,
-
-              margin: [12, 12, 12, 12],
-            },
           ],
         ],
       },
@@ -592,21 +533,21 @@ export function buildFornecedorRelatorioTemplate(
         headerRows: 1,
 
         widths: [
-          42, // Data
-          40, // Folha
-          70, // Fazenda
-          50, // Modelo
-          52, // Placa
-          52, // Kg Bruto
-          38, // Qtd
-          38, // Média
-          48, // Desc
-          52, // Kg Líq
-          48, // Preço
-          60, // Total
-          60, // Pago
-          60, // Restante
-          50, // Status
+          38, // Data
+          34, // Folha
+          62, // Fazenda
+          44, // Modelo
+          46, // Placa
+          48, // Kg Bruto
+          34, // Qtd
+          34, // Média
+          42, // Desc
+          48, // Kg Líq
+          44, // Preço
+          54, // Total
+          54, // Pago
+          54, // Restante
+          44, // Status
         ],
 
         body: [
@@ -828,6 +769,29 @@ export function buildFornecedorRelatorioTemplate(
 
                 {
                   text: dataEmissao,
+
+                  alignment: 'right',
+
+                  color: COLORS.text,
+
+                  fontSize: 8,
+                },
+                {
+                  text: 'USUÁRIO',
+
+                  alignment: 'right',
+
+                  bold: true,
+
+                  color: COLORS.primary,
+
+                  fontSize: 8,
+
+                  margin: [0, 8, 0, 0],
+                },
+
+                {
+                  text: usuarioNome,
 
                   alignment: 'right',
 

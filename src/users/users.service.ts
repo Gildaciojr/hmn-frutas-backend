@@ -7,6 +7,31 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   ////////////////////////////////////////////////////////////
+  // FIND LOGIN
+  ////////////////////////////////////////////////////////////
+
+  findByLogin(login: string) {
+    const normalizedLogin = login.trim().toLowerCase();
+
+    if (normalizedLogin.includes('@')) {
+      return this.prisma.user.findUnique({
+        where: {
+          email: normalizedLogin,
+        },
+      });
+    }
+
+    return this.prisma.user.findFirst({
+      where: {
+        username: {
+          equals: normalizedLogin,
+          mode: 'insensitive',
+        },
+      },
+    });
+  }
+
+  ////////////////////////////////////////////////////////////
   // FIND EMAIL
   ////////////////////////////////////////////////////////////
 
@@ -52,6 +77,8 @@ export class UsersService {
         nome: true,
 
         sobrenome: true,
+
+        username: true,
 
         email: true,
 

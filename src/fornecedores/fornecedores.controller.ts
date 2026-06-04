@@ -5,11 +5,14 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
+
+import type { JwtPayload } from '../auth/auth.service';
 
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
@@ -107,10 +110,18 @@ export class FornecedoresController {
     @Param('id')
     id: string,
 
+    @Req()
+    request: Request & {
+      user: JwtPayload;
+    },
+
     @Res()
     response: Response,
   ): Promise<void> {
-    const pdfBuffer = await this.service.gerarPdfFornecedor(id);
+    const pdfBuffer = await this.service.gerarPdfFornecedor(
+      id,
+      request.user.nome,
+    );
 
     response.set({
       'Content-Type': 'application/pdf',

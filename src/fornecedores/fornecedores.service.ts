@@ -609,11 +609,14 @@ export class FornecedoresService {
   // PDF FORNECEDOR
   ////////////////////////////////////////////////////////////
 
-  async gerarPdfFornecedor(fornecedorId: string): Promise<Buffer> {
+  async gerarPdfFornecedor(
+    fornecedorId: string,
+    usuarioNome: string,
+  ): Promise<Buffer> {
     const historico = await this.historicoCompleto(fornecedorId);
 
     const docDefinition: TDocumentDefinitions =
-      buildFornecedorRelatorioTemplate(historico);
+      buildFornecedorRelatorioTemplate(historico, usuarioNome);
 
     const fonts = {
       Roboto: {

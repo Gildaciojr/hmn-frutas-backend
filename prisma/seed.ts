@@ -11,44 +11,110 @@ const prisma = new PrismaClient({
   }),
 });
 
-async function main(): Promise<void> {
-  console.log('🌱 Iniciando seed...');
+interface SeedUser {
+  nome: string;
+  sobrenome: string;
+  username: string;
+  email: string;
+  senha: string;
+  telefone: string;
+  endereco: string;
+  role: Role;
+}
 
-  const email = 'admin@melancias.com';
+const users: SeedUser[] = [
+  {
+    nome: 'Administrador',
+    sobrenome: 'Sistema',
+    username: 'admin',
+    email: 'admin@melancias.com',
+    senha: 'admin123',
+    telefone: '64999999999',
+    endereco: 'Sistema Interno',
+    role: Role.ADMIN,
+  },
+  {
+    nome: 'Matheus',
+    sobrenome: 'Alvarenga',
+    username: 'matheus',
+    email: 'matheus@gmail.com',
+    senha: 'matheus123.',
+    telefone: '62992425387',
+    endereco: 'HMN Frutas',
+    role: Role.ADMIN,
+  },
+  {
+    nome: 'Joaquim',
+    sobrenome: 'Kerdole',
+    username: 'netinho',
+    email: 'hmnfrutas@gmail.com',
+    senha: 'netinho123.',
+    telefone: '62999625436',
+    endereco: 'HMN Frutas',
+    role: Role.ADMIN,
+  },
+];
 
-  const existingAdmin = await prisma.user.findUnique({
+async function upsertUser(user: SeedUser): Promise<void> {
+  const senhaHash = await bcrypt.hash(user.senha, 10);
+
+  const existingUser = await prisma.user.findFirst({
     where: {
-      email,
+      OR: [
+        {
+          email: user.email,
+        },
+        {
+          username: user.username,
+        },
+      ],
     },
   });
 
-  if (existingAdmin) {
-    console.log('ℹ️ Admin já existe:', email);
+  if (existingUser) {
+    await prisma.user.update({
+      where: {
+        id: existingUser.id,
+      },
+      data: {
+        nome: user.nome,
+        sobrenome: user.sobrenome,
+        username: user.username,
+        email: user.email,
+        senha: senhaHash,
+        telefone: user.telefone,
+        endereco: user.endereco,
+        role: user.role,
+      },
+    });
+
+    console.log('♻️ Usuário atualizado:', user.username);
 
     return;
   }
 
-  const senhaHash = await bcrypt.hash('admin123', 10);
-
-  const admin = await prisma.user.create({
+  await prisma.user.create({
     data: {
-      nome: 'Administrador',
-
-      sobrenome: 'Sistema',
-
-      email,
-
+      nome: user.nome,
+      sobrenome: user.sobrenome,
+      username: user.username,
+      email: user.email,
       senha: senhaHash,
-
-      telefone: '64999999999',
-
-      endereco: 'Sistema Interno',
-
-      role: Role.ADMIN,
+      telefone: user.telefone,
+      endereco: user.endereco,
+      role: user.role,
     },
   });
 
-  console.log('✅ Admin criado:', admin.email);
+  console.log('✅ Usuário criado:', user.username);
+}
+
+async function main(): Promise<void> {
+  console.log('🌱 Iniciando seed...');
+
+  for (const user of users) {
+    await upsertUser(user);
+  }
 
   console.log('🌱 Seed finalizado.');
 }
