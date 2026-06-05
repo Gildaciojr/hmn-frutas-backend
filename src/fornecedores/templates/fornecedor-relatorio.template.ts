@@ -537,19 +537,19 @@ export function buildFornecedorRelatorioTemplate(
         headerRows: 1,
 
         widths: [
-          52, // Data
-          50, // Folha
-          58, // Modelo
-          58, // Placa
-          62, // Kg Bruto
-          42, // Qtd
-          46, // Média
-          46, // Desc
-          62, // Kg Líq
-          56, // Preço
-          72, // Total
-          72, // Pago
-          72, // Restante
+          48, // Data
+          44, // Folha
+          52, // Modelo
+          52, // Placa
+          56, // Kg Bruto
+          38, // Qtd
+          40, // Média
+          40, // Desc
+          56, // Kg Líq
+          48, // Preço
+          62, // Total
+          62, // Pago
+          62, // Restante
         ],
 
         body: [
