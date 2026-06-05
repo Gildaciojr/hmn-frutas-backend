@@ -187,6 +187,8 @@ function tableHeader(text: string): Content {
   return {
     text,
 
+    noWrap: true,
+
     bold: true,
 
     color: COLORS.primary,
@@ -195,7 +197,7 @@ function tableHeader(text: string): Content {
 
     alignment: 'center',
 
-    fontSize: 8.5,
+    fontSize: 7.5,
 
     margin: [4, 6, 4, 6],
   };
@@ -249,6 +251,8 @@ export function buildFornecedorRelatorioTemplate(
     dateStyle: 'short',
 
     timeStyle: 'short',
+
+    timeZone: 'America/Sao_Paulo',
   }).format(new Date());
 
   ////////////////////////////////////////////////////////////
@@ -533,28 +537,25 @@ export function buildFornecedorRelatorioTemplate(
         headerRows: 1,
 
         widths: [
-          38, // Data
-          34, // Folha
-          62, // Fazenda
-          44, // Modelo
-          46, // Placa
-          48, // Kg Bruto
-          34, // Qtd
-          34, // Média
-          42, // Desc
-          48, // Kg Líq
-          44, // Preço
-          54, // Total
-          54, // Pago
-          54, // Restante
-          44, // Status
+          52, // Data
+          50, // Folha
+          58, // Modelo
+          58, // Placa
+          62, // Kg Bruto
+          42, // Qtd
+          46, // Média
+          46, // Desc
+          62, // Kg Líq
+          56, // Preço
+          72, // Total
+          72, // Pago
+          72, // Restante
         ],
 
         body: [
           [
             tableHeader('DATA'),
             tableHeader('FOLHA'),
-            tableHeader('FAZENDA'),
             tableHeader('MODELO'),
             tableHeader('PLACA'),
             tableHeader('KG BRUTO'),
@@ -566,15 +567,12 @@ export function buildFornecedorRelatorioTemplate(
             tableHeader('TOTAL'),
             tableHeader('PAGO'),
             tableHeader('RESTANTE'),
-            tableHeader('STATUS'),
           ],
 
           ...data.historicoOperacional.map((item) => [
             tableCell(formatDate(item.dataCompra), 'center'),
 
             tableCell(item.numeroFolha ?? '-', 'center'),
-
-            tableCell(item.fazenda ?? '-'),
 
             tableCell(item.modeloCaminhao ?? '-', 'center'),
 
@@ -597,8 +595,6 @@ export function buildFornecedorRelatorioTemplate(
             tableCell(money(item.valorPago), 'right'),
 
             tableCell(money(item.valorRestante), 'right'),
-
-            tableCell(item.statusFinanceiro, 'center'),
           ]),
         ],
       },
