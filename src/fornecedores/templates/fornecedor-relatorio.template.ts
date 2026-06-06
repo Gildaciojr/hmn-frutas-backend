@@ -147,7 +147,7 @@ function money(value: unknown): string {
 
 function numberBR(value: unknown): string {
   return toNumber(value).toLocaleString('pt-BR', {
-    minimumFractionDigits: 0,
+    minimumFractionDigits: 2,
 
     maximumFractionDigits: 2,
   });
