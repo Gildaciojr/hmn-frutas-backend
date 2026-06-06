@@ -205,7 +205,7 @@ function cardTitle(text: string): Content {
   return {
     text,
 
-    fontSize: 10.5,
+    fontSize: 10,
 
     bold: true,
 
@@ -221,7 +221,7 @@ function infoRow(label: string, value?: string | null): Content {
   return {
     columns: [
       {
-        width: 68,
+        width: 64,
 
         text: `${label}:`,
 
@@ -237,7 +237,7 @@ function infoRow(label: string, value?: string | null): Content {
 
         text: value?.trim() || '-',
 
-        fontSize: 10.5,
+        fontSize: 10,
 
         color: '#0F172A',
 
