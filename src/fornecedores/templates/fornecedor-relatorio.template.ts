@@ -542,7 +542,7 @@ export function buildFornecedorRelatorioTemplate(
           52, // Modelo
           52, // Placa
           56, // Kg Bruto
-          38, // Qtd
+          40, // Qtd
           40, // Média
           40, // Desc
           56, // Kg Líq
