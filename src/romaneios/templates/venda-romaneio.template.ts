@@ -928,12 +928,12 @@ export function buildVendaRomaneioTemplate(
         //////////////////////////////////////////////////////
 
         {
-          width: '49%',
+          width: '52%',
 
           margin: [10, 0, 0, 0],
 
           table: {
-            widths: ['45%', '20%', '35%'],
+            widths: [140, 90, '*'],
 
             body: [
               [
@@ -1030,7 +1030,7 @@ export function buildVendaRomaneioTemplate(
 
                   bold: true,
 
-                  fontSize: 18,
+                  fontSize: 14,
 
                   alignment: 'center',
 
