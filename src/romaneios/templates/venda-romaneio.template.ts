@@ -184,10 +184,15 @@ function numberBR(value: unknown): string {
   });
 }
 
-function formatDate(date: Date): string {
+function formatOnlyDate(date: Date): string {
   return new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
+  }).format(new Date(date));
+}
 
+function formatDateTime(date: Date): string {
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
     timeStyle: 'short',
   }).format(new Date(date));
 }
@@ -250,6 +255,8 @@ function tableHeader(text: string): Content {
   return {
     text,
 
+    noWrap: true,
+
     bold: true,
 
     color: COLORS.primary,
@@ -273,11 +280,11 @@ function tableCell(
 
     alignment,
 
-    margin: [8, 10, 8, 10],
+    margin: [6, 7, 6, 7],
 
     color: COLORS.text,
 
-    fontSize: 10.5,
+    fontSize: 9.5,
   };
 }
 
@@ -304,10 +311,10 @@ export function buildVendaRomaneioTemplate(
   ////////////////////////////////////////////////////////////
 
   const dataVenda = data.venda.dataVenda
-    ? formatDate(new Date(data.venda.dataVenda))
-    : formatDate(new Date(data.venda.createdAt));
+    ? formatOnlyDate(new Date(data.venda.dataVenda))
+    : formatOnlyDate(new Date(data.venda.createdAt));
 
-  const dataEmissao = formatDate(new Date(data.venda.createdAt));
+  const dataEmissao = formatDateTime(new Date(data.venda.createdAt));
 
   ////////////////////////////////////////////////////////////
   // STYLES
@@ -782,7 +789,7 @@ export function buildVendaRomaneioTemplate(
           width: '44%',
 
           table: {
-            widths: ['*', 68, 28],
+            widths: ['*', 68, 38],
 
             body: [
               [
@@ -926,7 +933,7 @@ export function buildVendaRomaneioTemplate(
           margin: [10, 0, 0, 0],
 
           table: {
-            widths: ['*', 90, 120],
+            widths: ['45%', '20%', '35%'],
 
             body: [
               [
@@ -1023,7 +1030,7 @@ export function buildVendaRomaneioTemplate(
 
                   bold: true,
 
-                  fontSize: 22,
+                  fontSize: 18,
 
                   alignment: 'center',
 
@@ -1033,7 +1040,7 @@ export function buildVendaRomaneioTemplate(
 
                   fillColor: COLORS.primary,
 
-                  margin: [6, 16, 6, 16],
+                  margin: [4, 12, 4, 12],
                 },
               ],
             ],
@@ -1216,7 +1223,7 @@ export function buildVendaRomaneioTemplate(
     //////////////////////////////////////////////////////////
 
     {
-      margin: [0, 8, 0, 0],
+      margin: [0, 4, 0, 0],
 
       table: {
         widths: [72, '*', 130],
@@ -1376,7 +1383,7 @@ export function buildVendaRomaneioTemplate(
   return {
     pageSize: 'A4',
 
-    pageMargins: [20, 18, 20, 22],
+    pageMargins: [18, 14, 18, 14],
 
     defaultStyle: {
       fontSize: 10,
