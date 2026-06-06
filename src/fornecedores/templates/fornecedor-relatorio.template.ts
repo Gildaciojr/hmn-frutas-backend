@@ -153,6 +153,13 @@ function numberBR(value: unknown): string {
   });
 }
 
+function numberBRInteger(value: unknown): string {
+  return Math.trunc(toNumber(value)).toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  });
+}
+
 function formatDate(date?: Date | string | null): string {
   if (!date) {
     return '-';
@@ -578,15 +585,15 @@ export function buildFornecedorRelatorioTemplate(
 
             tableCell(item.placa ?? '-', 'center'),
 
-            tableCell(numberBR(item.kgBruto), 'right'),
+            tableCell(numberBRInteger(item.kgBruto), 'right'),
 
-            tableCell(numberBR(item.quantidadeFrutas), 'right'),
+            tableCell(numberBRInteger(item.quantidadeFrutas), 'right'),
 
             tableCell(numberBR(item.mediaFruta), 'right'),
 
-            tableCell(numberBR(item.descontoKgCalculado), 'right'),
+            tableCell(numberBRInteger(item.descontoKgCalculado), 'right'),
 
-            tableCell(numberBR(item.kgLiquido), 'right'),
+            tableCell(numberBRInteger(item.kgLiquido), 'right'),
 
             tableCell(money(item.precoKg), 'right'),
 

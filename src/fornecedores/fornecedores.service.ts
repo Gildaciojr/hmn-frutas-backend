@@ -368,7 +368,7 @@ export class FornecedoresService {
       },
 
       orderBy: {
-        dataCompra: 'desc',
+        dataCompra: 'asc',
       },
     });
 
