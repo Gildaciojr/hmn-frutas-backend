@@ -541,10 +541,10 @@ export function buildFornecedorRelatorioTemplate(
           44, // Folha
           52, // Modelo
           52, // Placa
-          56, // Kg Bruto
-          40, // Qtd
-          40, // Média
-          40, // Desc
+          52, // Kg Bruto
+          42, // Qtd
+          38, // Média
+          42, // Desc
           56, // Kg Líq
           48, // Preço
           62, // Total
