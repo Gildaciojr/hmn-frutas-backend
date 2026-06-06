@@ -537,7 +537,7 @@ export function buildFornecedorRelatorioTemplate(
         headerRows: 1,
 
         widths: [
-          48, // Data
+          54, // Data
           44, // Folha
           52, // Modelo
           52, // Placa
