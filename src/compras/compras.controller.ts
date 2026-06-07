@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -20,6 +21,8 @@ import type { Request } from 'express';
 import { CreateCompraDto } from './dto/create-compra.dto';
 
 import { SearchCompraDto } from './dto/search-compra.dto';
+
+import { UpdateCompraDto } from './dto/update-compra.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('compras')
@@ -89,6 +92,21 @@ export class ComprasController {
     id: string,
   ) {
     return this.service.findByFornecedor(id);
+  }
+
+  ////////////////////////////////////////////////////////////
+  // UPDATE
+  ////////////////////////////////////////////////////////////
+
+  @Patch(':id')
+  update(
+    @Param('id')
+    id: string,
+
+    @Body()
+    body: UpdateCompraDto,
+  ) {
+    return this.service.update(id, body);
   }
 
   ////////////////////////////////////////////////////////////

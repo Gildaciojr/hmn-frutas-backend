@@ -17,6 +17,8 @@ import { CreateCompraDto } from './dto/create-compra.dto';
 
 import { SearchCompraDto } from './dto/search-compra.dto';
 
+import { UpdateCompraDto } from './dto/update-compra.dto';
+
 @Injectable()
 export class ComprasService {
   constructor(private readonly prisma: PrismaService) {}
@@ -353,6 +355,217 @@ export class ComprasService {
       });
 
       return compra;
+    });
+  }
+
+  async update(id: string, data: UpdateCompraDto): Promise<Compra> {
+    return this.prisma.$transaction(async (tx): Promise<Compra> => {
+      const compra = await tx.compra.findUnique({
+        where: { id },
+        include: {
+          transacoes: true,
+        },
+      });
+
+      if (!compra) {
+        throw new NotFoundException('Compra não encontrada');
+      }
+
+      const transacao = compra.transacoes.find(
+        (item) => item.compraId === compra.id,
+      );
+
+      if (!transacao) {
+        throw new BadRequestException(
+          'Transação financeira da compra não encontrada',
+        );
+      }
+
+      if (Number(transacao.valorPago ?? 0) > 0) {
+        throw new BadRequestException(
+          'Esta compra possui pagamentos registrados e não pode ser editada',
+        );
+      }
+
+      const fornecedorId =
+        data.fornecedorId ?? compra.fornecedorId ?? undefined;
+
+      if (!fornecedorId) {
+        throw new BadRequestException('Fornecedor é obrigatório');
+      }
+
+      const fornecedor = await tx.fornecedor.findUnique({
+        where: {
+          id: fornecedorId,
+        },
+      });
+
+      if (!fornecedor) {
+        throw new NotFoundException('Fornecedor não encontrado');
+      }
+
+      const fazendaFornecedorId =
+        data.fazendaFornecedorId ?? compra.fazendaFornecedorId ?? undefined;
+
+      if (!fazendaFornecedorId) {
+        throw new BadRequestException('Fazenda é obrigatória');
+      }
+
+      const fazendaFornecedor = await tx.fazendaFornecedor.findUnique({
+        where: {
+          id: fazendaFornecedorId,
+        },
+      });
+
+      if (!fazendaFornecedor) {
+        throw new NotFoundException('Fazenda não encontrada');
+      }
+
+      if (fazendaFornecedor.fornecedorId !== fornecedor.id) {
+        throw new BadRequestException(
+          'A fazenda não pertence ao fornecedor informado',
+        );
+      }
+
+      const kgBruto = data.kgBruto ?? compra.kgBruto;
+
+      const quantidadeFrutas = data.quantidadeFrutas ?? compra.quantidadeFrutas;
+
+      const modeloCaminhao = data.modeloCaminhao ?? compra.modeloCaminhao;
+
+      const tipoDesconto = data.tipoDesconto ?? compra.tipoDesconto;
+
+      const descontoPercentualAplicado =
+        data.descontoPercentualAplicado ??
+        compra.descontoPercentualAplicado ??
+        undefined;
+
+      const descontoKgManual =
+        data.descontoKgManual ?? compra.descontoKgManual ?? undefined;
+
+      const precoKg = new Prisma.Decimal(
+        data.precoKg ?? Number(compra.precoKg),
+      );
+
+      const despesas = new Prisma.Decimal(
+        data.despesas ?? Number(compra.despesas),
+      );
+
+      if (
+        tipoDesconto === TipoDescontoCompra.PERCENTUAL &&
+        (descontoPercentualAplicado === undefined ||
+          descontoPercentualAplicado < 0 ||
+          descontoPercentualAplicado > 100)
+      ) {
+        throw new BadRequestException('Percentual de desconto inválido');
+      }
+
+      if (
+        tipoDesconto === TipoDescontoCompra.MANUAL_KG &&
+        (descontoKgManual === undefined || descontoKgManual <= 0)
+      ) {
+        throw new BadRequestException('Desconto manual inválido');
+      }
+
+      const mediaFruta = this.calcularMediaFruta(kgBruto, quantidadeFrutas);
+
+      const descontoKgCalculado = this.calcularDescontoKg({
+        tipoDesconto,
+        modeloCaminhao,
+        kgBruto,
+        descontoPercentual: descontoPercentualAplicado,
+        descontoKgManual,
+      });
+
+      const kgLiquido = this.calcularPesoLiquido(kgBruto, descontoKgCalculado);
+
+      const totalBruto = this.calcularTotalBruto(kgLiquido, precoKg);
+
+      const valorTotal = this.calcularValorTotal(totalBruto, despesas);
+
+      const compraAtualizada = await tx.compra.update({
+        where: {
+          id,
+        },
+
+        data: {
+          clienteId: data.clienteId ?? compra.clienteId,
+
+          fornecedorId,
+
+          fazendaFornecedorId,
+
+          clienteNomeSnapshot: fornecedor.nome,
+
+          clienteTelefoneSnapshot: fornecedor.telefone ?? null,
+
+          safra: data.safra ?? compra.safra,
+
+          dataCompra: data.dataCompra
+            ? new Date(data.dataCompra)
+            : compra.dataCompra,
+
+          modeloCaminhao,
+
+          placa: data.placa?.trim().toUpperCase() ?? compra.placa,
+
+          kgBruto,
+
+          quantidadeFrutas,
+
+          mediaFruta,
+
+          tipoDesconto,
+
+          descontoPercentualAplicado,
+
+          descontoKgManual,
+
+          descontoKgCalculado,
+
+          kgDescontado: descontoKgCalculado,
+
+          kgLiquido,
+
+          precoKg,
+
+          totalBruto,
+
+          despesas,
+
+          valorTotal,
+
+          caminhoes: data.caminhoes ?? compra.caminhoes,
+
+          descontoKg: descontoKgManual,
+
+          descontoValor: Number(despesas),
+
+          observacoes: data.observacoes ?? compra.observacoes,
+        },
+      });
+
+      await tx.transacao.update({
+        where: {
+          id: transacao.id,
+        },
+
+        data: {
+          valor: valorTotal,
+
+          valorRestante: valorTotal,
+
+          fornecedorId,
+
+          clienteId: data.clienteId ?? compra.clienteId,
+
+          vencimento: data.dataCompra
+            ? new Date(data.dataCompra)
+            : compra.dataCompra,
+        },
+      });
+
+      return compraAtualizada;
     });
   }
 
