@@ -7,6 +7,7 @@ import {
 import {
   FormaPagamento,
   Prisma,
+  StatusCompra,
   StatusFinanceiro,
   StatusVenda,
   TipoTransacao,
@@ -14,6 +15,12 @@ import {
 
 import { AlertasService } from '../alertas/alertas.service';
 import { PrismaService } from '../prisma/prisma.service';
+
+import { Response } from 'express';
+
+import { RelatorioProducaoDto } from './dto/relatorio-producao.dto';
+
+import { gerarRelatorioProducaoPdf } from './templates/producao-relatorio.template';
 
 @Injectable()
 export class FinanceiroService {
@@ -266,6 +273,227 @@ export class FinanceiroService {
 
       take: 300,
     });
+  }
+
+  ////////////////////////////////////////////////////////////
+  // DADOS RELATÓRIO PRODUÇÃO
+  ////////////////////////////////////////////////////////////
+
+  private async obterDadosRelatorioProducao(filtros: RelatorioProducaoDto) {
+    const dataInicio = new Date(filtros.dataInicial);
+
+    const dataFim = new Date(filtros.dataFinal);
+
+    dataFim.setHours(23, 59, 59, 999);
+
+    const compraWhere: Prisma.CompraWhereInput = {
+      dataCompra: {
+        gte: dataInicio,
+        lte: dataFim,
+      },
+
+      status: {
+        not: StatusCompra.CANCELADA,
+      },
+    };
+
+    const vendaWhere: Prisma.VendaWhereInput = {
+      dataVenda: {
+        gte: dataInicio,
+        lte: dataFim,
+      },
+
+      status: {
+        not: StatusVenda.CANCELADA,
+      },
+    };
+
+    if (filtros.usuarioId) {
+      compraWhere.usuarioResponsavelId = filtros.usuarioId;
+
+      vendaWhere.usuarioResponsavelId = filtros.usuarioId;
+    }
+
+    const [compras, vendas] = await Promise.all([
+      this.prisma.compra.findMany({
+        where: compraWhere,
+
+        orderBy: {
+          createdAt: 'asc',
+        },
+      }),
+
+      this.prisma.venda.findMany({
+        where: vendaWhere,
+
+        orderBy: {
+          createdAt: 'asc',
+        },
+      }),
+    ]);
+
+    const usuarios = new Map<
+      string,
+      {
+        usuarioId: string | null;
+
+        usuarioNome: string;
+
+        quantidadeCompras: number;
+
+        quantidadeVendas: number;
+
+        kgComprado: number;
+
+        kgVendido: number;
+
+        valorComprado: number;
+
+        valorVendido: number;
+      }
+    >();
+
+    for (const compra of compras) {
+      const chave =
+        compra.usuarioResponsavelId ??
+        compra.usuarioResponsavelNome ??
+        'SEM_USUARIO';
+
+      if (!usuarios.has(chave)) {
+        usuarios.set(chave, {
+          usuarioId: compra.usuarioResponsavelId ?? null,
+
+          usuarioNome: compra.usuarioResponsavelNome ?? 'Não identificado',
+
+          quantidadeCompras: 0,
+
+          quantidadeVendas: 0,
+
+          kgComprado: 0,
+
+          kgVendido: 0,
+
+          valorComprado: 0,
+
+          valorVendido: 0,
+        });
+      }
+
+      const item = usuarios.get(chave)!;
+
+      item.quantidadeCompras += 1;
+
+      item.kgComprado += Number(compra.kgLiquido ?? 0);
+
+      item.valorComprado += Number(compra.valorTotal ?? 0);
+    }
+
+    for (const venda of vendas) {
+      const chave =
+        venda.usuarioResponsavelId ??
+        venda.usuarioResponsavelNome ??
+        'SEM_USUARIO';
+
+      if (!usuarios.has(chave)) {
+        usuarios.set(chave, {
+          usuarioId: venda.usuarioResponsavelId ?? null,
+
+          usuarioNome: venda.usuarioResponsavelNome ?? 'Não identificado',
+
+          quantidadeCompras: 0,
+
+          quantidadeVendas: 0,
+
+          kgComprado: 0,
+
+          kgVendido: 0,
+
+          valorComprado: 0,
+
+          valorVendido: 0,
+        });
+      }
+
+      const item = usuarios.get(chave)!;
+
+      item.quantidadeVendas += 1;
+
+      item.kgVendido += Number(venda.pesoLiquido ?? 0);
+
+      item.valorVendido += Number(venda.valorTotal ?? 0);
+    }
+
+    const producaoPorUsuario = Array.from(usuarios.values()).sort(
+      (a, b) =>
+        b.quantidadeCompras +
+        b.quantidadeVendas -
+        (a.quantidadeCompras + a.quantidadeVendas),
+    );
+
+    return {
+      periodo: {
+        dataInicio,
+
+        dataFim,
+      },
+
+      filtros,
+
+      totais: {
+        compras: compras.length,
+
+        vendas: vendas.length,
+
+        valorComprado: compras.reduce(
+          (acc, item) => acc + Number(item.valorTotal ?? 0),
+          0,
+        ),
+
+        valorVendido: vendas.reduce(
+          (acc, item) => acc + Number(item.valorTotal ?? 0),
+          0,
+        ),
+
+        kgComprado: compras.reduce(
+          (acc, item) => acc + Number(item.kgLiquido ?? 0),
+          0,
+        ),
+
+        kgVendido: vendas.reduce(
+          (acc, item) => acc + Number(item.pesoLiquido ?? 0),
+          0,
+        ),
+      },
+
+      producaoPorUsuario,
+
+      compras,
+
+      vendas,
+    };
+  }
+
+  ////////////////////////////////////////////////////////////
+  // PDF RELATÓRIO PRODUÇÃO
+  ////////////////////////////////////////////////////////////
+
+  async gerarRelatorioProducaoPdf(
+    filtros: RelatorioProducaoDto,
+    res: Response,
+  ) {
+    const dados = await this.obterDadosRelatorioProducao(filtros);
+
+    const pdfBuffer = await gerarRelatorioProducaoPdf(dados);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+
+      'Content-Disposition': `attachment; filename=relatorio-producao.pdf`,
+
+      'Content-Length': pdfBuffer.length,
+    });
+
+    res.end(pdfBuffer);
   }
 
   ////////////////////////////////////////////////////////////

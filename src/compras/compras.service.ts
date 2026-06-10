@@ -227,6 +227,25 @@ export class ComprasService {
           numeroFolha,
 
           ////////////////////////////////////////////////
+          // CONTROLE INTERNO HMN
+          ////////////////////////////////////////////////
+
+          controleInterno: data.controleInterno ?? false,
+
+          qualidadeFruta: data.qualidadeFruta ?? null,
+
+          cargueiro: data.cargueiro?.trim() || null,
+
+          motoristaNome: data.motoristaNome?.trim() || null,
+
+          motoristaTelefone: data.motoristaTelefone?.trim() || null,
+
+          icmsOutros:
+            data.icmsOutros !== undefined
+              ? new Prisma.Decimal(data.icmsOutros)
+              : null,
+
+          ////////////////////////////////////////////////
           // PESAGEM
           ////////////////////////////////////////////////
 
@@ -361,9 +380,16 @@ export class ComprasService {
   async update(id: string, data: UpdateCompraDto): Promise<Compra> {
     return this.prisma.$transaction(async (tx): Promise<Compra> => {
       const compra = await tx.compra.findUnique({
-        where: { id },
+        where: {
+          id,
+        },
+
         include: {
-          transacoes: true,
+          transacoes: {
+            include: {
+              pagamentos: true,
+            },
+          },
         },
       });
 
@@ -371,9 +397,13 @@ export class ComprasService {
         throw new NotFoundException('Compra não encontrada');
       }
 
-      const transacao = compra.transacoes.find(
-        (item) => item.compraId === compra.id,
-      );
+      if (compra.transacoes.length !== 1) {
+        throw new BadRequestException(
+          'Estrutura financeira da compra inválida',
+        );
+      }
+
+      const transacao = compra.transacoes[0];
 
       if (!transacao) {
         throw new BadRequestException(
@@ -381,7 +411,16 @@ export class ComprasService {
         );
       }
 
-      if (Number(transacao.valorPago ?? 0) > 0) {
+      if (compra.status !== 'FECHADA') {
+        throw new BadRequestException(
+          'Somente compras fechadas podem ser editadas',
+        );
+      }
+
+      if (
+        Number(transacao.valorPago ?? 0) > 0 ||
+        transacao.pagamentos.length > 0
+      ) {
         throw new BadRequestException(
           'Esta compra possui pagamentos registrados e não pode ser editada',
         );
@@ -467,6 +506,22 @@ export class ComprasService {
         throw new BadRequestException('Desconto manual inválido');
       }
 
+      if (kgBruto <= 0) {
+        throw new BadRequestException('KG bruto inválido');
+      }
+
+      if (quantidadeFrutas <= 0) {
+        throw new BadRequestException('Quantidade de frutas inválida');
+      }
+
+      if (precoKg.lte(0)) {
+        throw new BadRequestException('Preço por KG inválido');
+      }
+
+      if (despesas.lt(0)) {
+        throw new BadRequestException('Despesas inválidas');
+      }
+
       const mediaFruta = this.calcularMediaFruta(kgBruto, quantidadeFrutas);
 
       const descontoKgCalculado = this.calcularDescontoKg({
@@ -508,6 +563,25 @@ export class ComprasService {
           modeloCaminhao,
 
           placa: data.placa?.trim().toUpperCase() ?? compra.placa,
+
+          ////////////////////////////////////////////////
+          // CONTROLE INTERNO HMN
+          ////////////////////////////////////////////////
+
+          controleInterno: data.controleInterno ?? compra.controleInterno,
+
+          qualidadeFruta: data.qualidadeFruta ?? compra.qualidadeFruta,
+
+          cargueiro: data.cargueiro ?? compra.cargueiro,
+
+          motoristaNome: data.motoristaNome ?? compra.motoristaNome,
+
+          motoristaTelefone: data.motoristaTelefone ?? compra.motoristaTelefone,
+
+          icmsOutros:
+            data.icmsOutros !== undefined
+              ? new Prisma.Decimal(data.icmsOutros)
+              : compra.icmsOutros,
 
           kgBruto,
 
@@ -716,6 +790,64 @@ export class ComprasService {
       orderBy: {
         dataCompra: 'desc',
       },
+    });
+  }
+
+  //////////////////////////////////////////////////
+  // ORIGEM VENDA POR PLACA
+  //////////////////////////////////////////////////
+
+  async buscarOrigemPorPlaca(placa: string) {
+    const placaNormalizada = placa
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+
+    if (placaNormalizada.length < 3) {
+      return [];
+    }
+
+    return this.prisma.compra.findMany({
+      where: {
+        status: 'FECHADA',
+
+        placa: {
+          contains: placaNormalizada,
+          mode: 'insensitive',
+        },
+      },
+
+      select: {
+        id: true,
+
+        numeroFolha: true,
+
+        placa: true,
+
+        modeloCaminhao: true,
+
+        motoristaNome: true,
+
+        motoristaTelefone: true,
+
+        kgBruto: true,
+
+        descontoKgCalculado: true,
+
+        quantidadeFrutas: true,
+
+        mediaFruta: true,
+
+        dataCompra: true,
+
+        status: true,
+      },
+
+      orderBy: {
+        dataCompra: 'desc',
+      },
+
+      take: 10,
     });
   }
 

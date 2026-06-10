@@ -12,7 +12,13 @@ import {
   ValidateIf,
 } from 'class-validator';
 
-import { ModeloCaminhao, TipoDescontoCompra } from '@prisma/client';
+import {
+  ModeloCaminhao,
+  QualidadeFrutaCompra,
+  TipoDescontoCompra,
+} from '@prisma/client';
+
+import { IsBoolean } from 'class-validator';
 
 export class CreateCompraDto {
   //////////////////////////////////////////////////
@@ -230,6 +236,23 @@ export class CreateCompraDto {
   @IsString()
   @MaxLength(50)
   numeroFolha?: string;
+
+  //////////////////////////////////////////////////
+  // CONTROLE INTERNO HMN
+  //////////////////////////////////////////////////
+
+  @IsOptional()
+  @IsBoolean()
+  controleInterno?: boolean;
+
+  @IsOptional()
+  @IsEnum(QualidadeFrutaCompra)
+  qualidadeFruta?: QualidadeFrutaCompra;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  cargueiro?: string;
 
   //////////////////////////////////////////////////
   // LEGADO / COMPATIBILIDADE

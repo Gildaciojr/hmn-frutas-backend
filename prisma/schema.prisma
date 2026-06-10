@@ -48,6 +48,12 @@ enum StatusCompra {
   CANCELADA
 }
 
+enum QualidadeFrutaCompra {
+  GRAUDA
+  MEDIA
+  MIUDA
+}
+
 //////////////////////////////////////////////////
 // VENDAS / ROMANEIO
 //////////////////////////////////////////////////
@@ -262,6 +268,22 @@ model Compra {
   numeroFolha String?
 
   //////////////////////////////////////////////////
+  // CONTROLE INTERNO HMN
+  //////////////////////////////////////////////////
+
+  controleInterno Boolean @default(false)
+
+  qualidadeFruta QualidadeFrutaCompra?
+
+  cargueiro String?
+
+  motoristaNome String?
+
+  motoristaTelefone String?
+
+  icmsOutros Decimal? @db.Decimal(10, 2)
+
+  //////////////////////////////////////////////////
   // PESAGEM
   //////////////////////////////////////////////////
 
@@ -351,6 +373,8 @@ model Compra {
 
   transacoes Transacao[]
 
+  vendasOrigem Venda[] @relation("CompraOrigemVenda")
+
   //////////////////////////////////////////////////
   // NOVO DOMÍNIO COMPRAS
   //////////////////////////////////////////////////
@@ -395,6 +419,10 @@ model Venda {
 
   cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Restrict)
 
+  compraOrigemId String?
+
+  compraOrigem Compra? @relation("CompraOrigemVenda", fields: [compraOrigemId], references: [id], onDelete: Restrict)
+
   //////////////////////////////////////////////////
   // SNAPSHOT CLIENTE
   //////////////////////////////////////////////////
@@ -424,6 +452,8 @@ model Venda {
   telefone String?
 
   localEntrega String?
+
+  compraOrigemNumeroFolha String?
 
   //////////////////////////////////////////////////
   // ROMANEIO
@@ -604,6 +634,8 @@ model Venda {
   @@index([dataVenda, status])
   @@index([dataVenda, statusPagamento])
   @@index([usuarioResponsavelId])
+  @@index([compraOrigemId])
+  @@index([compraOrigemNumeroFolha])
 }
 
 //////////////////////////////////////////////////

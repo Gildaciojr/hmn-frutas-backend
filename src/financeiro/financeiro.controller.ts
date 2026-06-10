@@ -1,10 +1,14 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
 
 import { FinanceiroService } from './financeiro.service';
 
 import { CreateTransacaoDto } from './dto/create-transacao.dto';
 
 import { RegistrarPagamentoDto } from './dto/registrar-pagamento.dto';
+
+import { RelatorioProducaoDto } from './dto/relatorio-producao.dto';
+
+import type { Response } from 'express';
 
 @Controller('financeiro')
 export class FinanceiroController {
@@ -26,6 +30,21 @@ export class FinanceiroController {
   @Get('fluxo')
   fluxo() {
     return this.financeiroService.fluxo();
+  }
+
+  ////////////////////////////////////////////////////////////
+  // RELATÓRIO PRODUÇÃO PDF
+  ////////////////////////////////////////////////////////////
+
+  @Get('producao/pdf')
+  gerarRelatorioProducao(
+    @Query()
+    filtros: RelatorioProducaoDto,
+
+    @Res()
+    res: Response,
+  ) {
+    return this.financeiroService.gerarRelatorioProducaoPdf(filtros, res);
   }
 
   ////////////////////////////////////////////////////////////

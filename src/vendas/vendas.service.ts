@@ -47,6 +47,28 @@ export class VendasService {
       }
 
       ////////////////////////////////////////////////////////
+      // COMPRA DE ORIGEM
+      ////////////////////////////////////////////////////////
+
+      const compraOrigem = data.compraOrigemId
+        ? await tx.compra.findUnique({
+            where: {
+              id: data.compraOrigemId,
+            },
+          })
+        : null;
+
+      if (data.compraOrigemId && !compraOrigem) {
+        throw new NotFoundException('Compra de origem não encontrada');
+      }
+
+      if (compraOrigem && compraOrigem.status === 'CANCELADA') {
+        throw new BadRequestException(
+          'Não é possível utilizar uma compra cancelada como origem',
+        );
+      }
+
+      ////////////////////////////////////////////////////////
       // VALIDAÇÕES
       ////////////////////////////////////////////////////////
 
@@ -215,6 +237,25 @@ export class VendasService {
       const numeroRomaneio = await this.gerarNumeroRomaneio(tx);
 
       ////////////////////////////////////////////////////////
+      // SNAPSHOTS DA COMPRA DE ORIGEM
+      ////////////////////////////////////////////////////////
+
+      const motoristaNome = compraOrigem?.motoristaNome ?? data.motoristaNome;
+
+      const motoristaTelefone =
+        compraOrigem?.motoristaTelefone ?? data.motoristaTelefone;
+
+      const qualidade =
+        compraOrigem?.qualidadeFruta !== null &&
+        compraOrigem?.qualidadeFruta !== undefined
+          ? String(compraOrigem.qualidadeFruta)
+          : data.qualidade;
+
+      const icmsOutrosOrigem = compraOrigem?.icmsOutros ?? icmsOutros;
+
+      const compraOrigemNumeroFolha = compraOrigem?.numeroFolha ?? null;
+
+      ////////////////////////////////////////////////////////
       // VENDA
       ////////////////////////////////////////////////////////
 
@@ -225,6 +266,14 @@ export class VendasService {
           ////////////////////////////////////////////////////
 
           clienteId: data.clienteId,
+
+          //////////////////////////////////////////////////
+          // COMPRA ORIGEM
+          //////////////////////////////////////////////////
+
+          compraOrigemId: compraOrigem?.id ?? null,
+
+          compraOrigemNumeroFolha,
 
           ////////////////////////////////////////////////////
           // SNAPSHOT CLIENTE
@@ -248,7 +297,7 @@ export class VendasService {
 
           produto: data.produto ?? 'Melancia',
 
-          qualidade: data.qualidade,
+          qualidade,
 
           cidade: data.cidade,
 
@@ -278,9 +327,9 @@ export class VendasService {
           // MOTORISTA
           ////////////////////////////////////////////////////
 
-          motoristaNome: data.motoristaNome,
+          motoristaNome,
 
-          motoristaTelefone: data.motoristaTelefone,
+          motoristaTelefone,
 
           motoristaCpf: data.motoristaCpf,
 
@@ -320,7 +369,7 @@ export class VendasService {
 
           descontoValor,
 
-          icmsOutros,
+          icmsOutros: icmsOutrosOrigem,
 
           valorMelancia,
 
@@ -424,6 +473,7 @@ export class VendasService {
     return this.prisma.venda.findMany({
       include: {
         cliente: true,
+        compraOrigem: true,
       },
 
       orderBy: {
@@ -452,6 +502,7 @@ export class VendasService {
 
       include: {
         cliente: true,
+        compraOrigem: true,
       },
 
       orderBy: {
@@ -486,6 +537,7 @@ export class VendasService {
 
       include: {
         cliente: true,
+        compraOrigem: true,
 
         transacoes: {
           include: {
@@ -530,6 +582,7 @@ export class VendasService {
 
       include: {
         cliente: true,
+        compraOrigem: true,
 
         transacoes: {
           include: {
@@ -570,6 +623,8 @@ export class VendasService {
 
       include: {
         cliente: true,
+
+        compraOrigem: true,
 
         transacoes: true,
       },
