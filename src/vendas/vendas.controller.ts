@@ -19,6 +19,8 @@ import { VendasService } from './vendas.service';
 
 import { CreateVendaDto } from './dto/create-venda.dto';
 
+import { UpdateVendaDto } from './dto/update-venda.dto';
+
 @UseGuards(JwtAuthGuard)
 @Controller('vendas')
 export class VendasController {
@@ -87,6 +89,21 @@ export class VendasController {
     numero: string,
   ) {
     return this.vendasService.findByRomaneio(numero);
+  }
+
+  ////////////////////////////////////////////////////////////
+  // UPDATE
+  ////////////////////////////////////////////////////////////
+
+  @Patch(':id')
+  update(
+    @Param('id')
+    id: string,
+
+    @Body()
+    body: UpdateVendaDto,
+  ) {
+    return this.vendasService.update(id, body);
   }
 
   ////////////////////////////////////////////////////////////

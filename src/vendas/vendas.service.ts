@@ -16,6 +16,8 @@ import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateVendaDto } from './dto/create-venda.dto';
 
+import { UpdateVendaDto } from './dto/update-venda.dto';
+
 @Injectable()
 export class VendasService {
   constructor(private readonly prisma: PrismaService) {}
@@ -732,6 +734,311 @@ export class VendasService {
     const proximoNumero = numeroAtual + 1;
 
     return String(proximoNumero).padStart(6, '0');
+  }
+
+  ////////////////////////////////////////////////////////////
+  // UPDATE
+  ////////////////////////////////////////////////////////////
+
+  async update(id: string, data: UpdateVendaDto): Promise<Venda> {
+    return this.prisma.$transaction(async (tx): Promise<Venda> => {
+      const venda = await tx.venda.findUnique({
+        where: {
+          id,
+        },
+
+        include: {
+          cliente: true,
+
+          compraOrigem: true,
+
+          transacoes: {
+            include: {
+              pagamentos: true,
+            },
+          },
+        },
+      });
+
+      if (!venda) {
+        throw new NotFoundException('Venda não encontrada');
+      }
+
+      if (venda.status === StatusVenda.CANCELADA) {
+        throw new BadRequestException('Venda cancelada não pode ser editada');
+      }
+
+      if (venda.transacoes.length !== 1) {
+        throw new BadRequestException('Estrutura financeira da venda inválida');
+      }
+
+      const transacao = venda.transacoes[0];
+
+      if (!transacao) {
+        throw new BadRequestException(
+          'Transação financeira da venda não encontrada',
+        );
+      }
+
+      if (
+        Number(transacao.valorPago ?? 0) > 0 ||
+        transacao.pagamentos.length > 0
+      ) {
+        throw new BadRequestException(
+          'Esta venda possui pagamentos registrados e não pode ser editada',
+        );
+      }
+
+      const clienteId = data.clienteId ?? venda.clienteId;
+
+      const cliente = await tx.cliente.findUnique({
+        where: {
+          id: clienteId,
+        },
+      });
+
+      if (!cliente) {
+        throw new NotFoundException('Cliente não encontrado');
+      }
+
+      const pesoBruto = data.pesoBruto ?? venda.pesoBruto;
+
+      const pesoDesconto = data.pesoDesconto ?? venda.pesoDesconto ?? 0;
+
+      if (pesoBruto <= 0) {
+        throw new BadRequestException('Peso bruto inválido');
+      }
+
+      if (pesoDesconto < 0) {
+        throw new BadRequestException('Peso desconto inválido');
+      }
+
+      const pesoLiquido =
+        data.pesoLiquido !== undefined
+          ? Number(data.pesoLiquido)
+          : pesoBruto - pesoDesconto;
+
+      if (pesoLiquido <= 0) {
+        throw new BadRequestException('Peso líquido inválido');
+      }
+
+      const quantidadeFrutas =
+        data.quantidadeFrutas ?? venda.quantidadeFrutas ?? undefined;
+
+      if (quantidadeFrutas !== undefined && quantidadeFrutas <= 0) {
+        throw new BadRequestException('Quantidade de frutas inválida');
+      }
+
+      const mediaFruta =
+        data.mediaFruta !== undefined
+          ? Number(Number(data.mediaFruta).toFixed(1))
+          : quantidadeFrutas && quantidadeFrutas > 0
+            ? Number((pesoBruto / quantidadeFrutas).toFixed(1))
+            : null;
+
+      const precoMelancia = new Prisma.Decimal(
+        data.precoMelancia ?? Number(venda.precoMelancia),
+      );
+
+      if (precoMelancia.lte(0)) {
+        throw new BadRequestException('Preço da melancia inválido');
+      }
+
+      const valorMelancia =
+        data.valorMelancia !== undefined
+          ? new Prisma.Decimal(data.valorMelancia)
+          : new Prisma.Decimal(pesoLiquido).mul(precoMelancia);
+
+      const freteTotal =
+        data.freteTotal !== undefined
+          ? new Prisma.Decimal(data.freteTotal)
+          : new Prisma.Decimal(venda.freteTotal ?? 0);
+
+      if (freteTotal.lt(0)) {
+        throw new BadRequestException('Frete inválido');
+      }
+
+      const valorTotal =
+        data.valorTotal !== undefined
+          ? new Prisma.Decimal(data.valorTotal)
+          : valorMelancia.sub(freteTotal);
+
+      if (valorTotal.lte(0)) {
+        throw new BadRequestException('Valor total inválido');
+      }
+
+      const [totalComprado, totalVendido] = await Promise.all([
+        tx.compra.aggregate({
+          _sum: {
+            kgBruto: true,
+          },
+        }),
+
+        tx.venda.aggregate({
+          where: {
+            status: {
+              not: StatusVenda.CANCELADA,
+            },
+          },
+
+          _sum: {
+            pesoBruto: true,
+          },
+        }),
+      ]);
+
+      const estoqueDisponivel =
+        Number(totalComprado._sum.kgBruto ?? 0) -
+        Number(totalVendido._sum.pesoBruto ?? 0);
+
+      const estoqueDisponivelReal = estoqueDisponivel + venda.pesoBruto;
+
+      if (pesoBruto > estoqueDisponivelReal) {
+        throw new BadRequestException(
+          `Estoque insuficiente. Disponível: ${estoqueDisponivelReal.toFixed(
+            2,
+          )} kg`,
+        );
+      }
+
+      const telefoneVenda =
+        data.telefone?.trim() || cliente.telefone || venda.telefone || null;
+
+      const cidadeVenda =
+        data.cidade?.trim() || cliente.cidade || venda.cidade || null;
+
+      const localEntregaVenda =
+        data.localEntrega?.trim() ||
+        [cliente.endereco, cliente.bairro].filter(Boolean).join(' • ') ||
+        venda.localEntrega ||
+        null;
+
+      const vendaAtualizada = await tx.venda.update({
+        where: {
+          id,
+        },
+
+        data: {
+          clienteId,
+
+          clienteNomeSnapshot: cliente.nome,
+
+          clienteTelefoneSnapshot: telefoneVenda,
+
+          clienteDocumentoSnapshot: cliente.cpf ?? cliente.cnpj ?? null,
+
+          clienteEnderecoSnapshot: cliente.endereco,
+
+          dataVenda: data.dataVenda
+            ? new Date(data.dataVenda)
+            : venda.dataVenda,
+
+          produto: data.produto ?? venda.produto,
+
+          qualidade: data.qualidade ?? venda.qualidade,
+
+          cidade: cidadeVenda,
+
+          telefone: telefoneVenda,
+
+          localEntrega: localEntregaVenda,
+
+          destino: data.destino ?? venda.destino,
+
+          tipoFrete: data.tipoFrete ?? venda.tipoFrete,
+
+          placa: data.placa?.trim().toUpperCase() ?? venda.placa,
+
+          modeloCaminhao: data.modeloCaminhao ?? venda.modeloCaminhao,
+
+          motoristaNome: data.motoristaNome ?? venda.motoristaNome,
+
+          motoristaTelefone: data.motoristaTelefone ?? venda.motoristaTelefone,
+
+          motoristaCpf: data.motoristaCpf ?? venda.motoristaCpf,
+
+          pesoBruto,
+
+          pesoDesconto,
+
+          pesoLiquido,
+
+          quantidadeKg: pesoLiquido,
+
+          quantidadeFrutas,
+
+          mediaFruta,
+
+          precoMelancia,
+
+          observacaoPreco: data.observacaoPreco ?? venda.observacaoPreco,
+
+          precoMercado:
+            data.precoMercado !== undefined
+              ? new Prisma.Decimal(data.precoMercado)
+              : venda.precoMercado,
+
+          precoFrete:
+            data.precoFrete !== undefined
+              ? new Prisma.Decimal(data.precoFrete)
+              : venda.precoFrete,
+
+          valorPorKg: precoMelancia,
+
+          precoFinal:
+            data.precoFinal !== undefined
+              ? new Prisma.Decimal(data.precoFinal)
+              : venda.precoFinal,
+
+          descontoFruta:
+            data.descontoFruta !== undefined
+              ? new Prisma.Decimal(data.descontoFruta)
+              : venda.descontoFruta,
+
+          descontoValor:
+            data.descontoValor !== undefined
+              ? new Prisma.Decimal(data.descontoValor)
+              : venda.descontoValor,
+
+          icmsOutros:
+            data.icmsOutros !== undefined
+              ? new Prisma.Decimal(data.icmsOutros)
+              : venda.icmsOutros,
+
+          valorMelancia,
+
+          freteTotal,
+
+          valorTotal,
+
+          statusPagamento: data.statusPagamento ?? venda.statusPagamento,
+
+          observacoes: data.observacoes ?? venda.observacoes,
+        },
+      });
+
+      await tx.transacao.update({
+        where: {
+          id: transacao.id,
+        },
+
+        data: {
+          valor: valorTotal,
+
+          valorRestante: valorTotal,
+
+          clienteId,
+
+          vencimento: data.dataVenda
+            ? new Date(data.dataVenda)
+            : venda.dataVenda,
+
+          descricao: `Venda pedido ${venda.numeroPedido}`,
+        },
+      });
+
+      return vendaAtualizada;
+    });
   }
 
   ////////////////////////////////////////////////////////////
