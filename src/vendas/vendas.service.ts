@@ -225,16 +225,24 @@ export class VendasService {
           : null;
 
       ////////////////////////////////////////////////////////
+      // FOLHA DA COMPRA DE ORIGEM
+      ////////////////////////////////////////////////////////
+
+      const compraOrigemNumeroFolha = compraOrigem?.numeroFolha ?? null;
+
+      ////////////////////////////////////////////////////////
       // PEDIDO
       ////////////////////////////////////////////////////////
 
-      const numeroPedido = await this.gerarNumeroPedido(tx);
+      const numeroPedido =
+        compraOrigemNumeroFolha ?? (await this.gerarNumeroPedido(tx));
 
       ////////////////////////////////////////////////////////
       // ROMANEIO INTERNO
       ////////////////////////////////////////////////////////
 
-      const numeroRomaneio = await this.gerarNumeroRomaneio(tx);
+      const numeroRomaneio =
+        compraOrigemNumeroFolha ?? (await this.gerarNumeroRomaneio(tx));
 
       ////////////////////////////////////////////////////////
       // SNAPSHOTS DA COMPRA DE ORIGEM
@@ -253,7 +261,14 @@ export class VendasService {
 
       const icmsOutrosOrigem = compraOrigem?.icmsOutros ?? icmsOutros;
 
-      const compraOrigemNumeroFolha = compraOrigem?.numeroFolha ?? null;
+      const telefoneVenda = data.telefone?.trim() || cliente.telefone || null;
+
+      const cidadeVenda = data.cidade?.trim() || cliente.cidade || null;
+
+      const localEntregaVenda =
+        data.localEntrega?.trim() ||
+        [cliente.endereco, cliente.bairro].filter(Boolean).join(' • ') ||
+        null;
 
       ////////////////////////////////////////////////////////
       // VENDA
@@ -281,7 +296,7 @@ export class VendasService {
 
           clienteNomeSnapshot: cliente.nome,
 
-          clienteTelefoneSnapshot: data.telefone ?? cliente.telefone,
+          clienteTelefoneSnapshot: telefoneVenda,
 
           clienteDocumentoSnapshot: cliente.cpf ?? cliente.cnpj ?? null,
 
@@ -299,11 +314,11 @@ export class VendasService {
 
           qualidade,
 
-          cidade: data.cidade,
+          cidade: cidadeVenda,
 
-          telefone: data.telefone,
+          telefone: telefoneVenda,
 
-          localEntrega: data.localEntrega,
+          localEntrega: localEntregaVenda,
 
           ////////////////////////////////////////////////////
           // ROMANEIO

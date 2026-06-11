@@ -62,6 +62,8 @@ export interface VendaRomaneioData {
 
     dataVenda?: Date | null;
 
+    compraOrigemNumeroFolha?: string | null;
+
     ////////////////////////////////////////////////////////
     // CLIENTE
     ////////////////////////////////////////////////////////
@@ -545,6 +547,7 @@ export function buildVendaRomaneioTemplate(
                       stack: [
                         {
                           text:
+                            data.venda.compraOrigemNumeroFolha ??
                             data.venda.numeroPedido ??
                             data.venda.numeroRomaneio ??
                             '-',
