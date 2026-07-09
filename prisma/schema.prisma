@@ -265,7 +265,7 @@ model Compra {
 
   placa String
 
-  numeroFolha String?
+  numeroFolha String? @unique
 
   //////////////////////////////////////////////////
   // CONTROLE INTERNO HMN
@@ -395,7 +395,6 @@ model Compra {
   @@index([dataCompra])
   @@index([modeloCaminhao])
   @@index([placa])
-  @@index([numeroFolha])
   @@index([status])
   @@index([createdAt])
   @@index([createdAt, status])

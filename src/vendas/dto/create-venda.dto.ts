@@ -1,5 +1,6 @@
 import {
   IsEnum,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -36,6 +37,7 @@ export class CreateVendaDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(50)
   numeroPedido?: string;
 
@@ -74,6 +76,7 @@ export class CreateVendaDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(50)
   numeroRomaneio?: string;
 

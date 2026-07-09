@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -236,15 +237,37 @@ export class VendasService {
       // PEDIDO
       ////////////////////////////////////////////////////////
 
+      const numeroPedidoManual = this.normalizarNumeroPedido(
+        data.numeroPedido,
+      );
+
+      const numeroRomaneioManual = this.normalizarNumeroRomaneio(
+        data.numeroRomaneio,
+      );
+
+      this.validarNumerosManuaisComCompraOrigem(
+        compraOrigemNumeroFolha,
+        numeroPedidoManual,
+        numeroRomaneioManual,
+      );
+
       const numeroPedido =
-        compraOrigemNumeroFolha ?? (await this.gerarNumeroPedido(tx));
+        compraOrigemNumeroFolha ??
+        numeroPedidoManual ??
+        (await this.gerarNumeroPedido(tx));
 
       ////////////////////////////////////////////////////////
       // ROMANEIO INTERNO
       ////////////////////////////////////////////////////////
 
       const numeroRomaneio =
-        compraOrigemNumeroFolha ?? (await this.gerarNumeroRomaneio(tx));
+        compraOrigemNumeroFolha ??
+        numeroRomaneioManual ??
+        (await this.gerarNumeroRomaneio(tx));
+
+      await this.validarNumeroPedidoDisponivel(tx, numeroPedido);
+
+      await this.validarNumeroRomaneioDisponivel(tx, numeroRomaneio);
 
       ////////////////////////////////////////////////////////
       // SNAPSHOTS DA COMPRA DE ORIGEM
@@ -420,6 +443,10 @@ export class VendasService {
 
           observacoes: data.observacoes,
         },
+      }).catch((error: unknown) => {
+        this.lancarErroNumeroOperacionalDuplicadoSeNecessario(error);
+
+        throw error;
       });
 
       ////////////////////////////////////////////////////////
@@ -676,6 +703,171 @@ export class VendasService {
     }
   }
 
+  private normalizarNumeroPedido(numeroPedido?: string | null): string | null {
+    return this.normalizarNumeroOperacional(numeroPedido, 'pedido');
+  }
+
+  private normalizarNumeroRomaneio(
+    numeroRomaneio?: string | null,
+  ): string | null {
+    return this.normalizarNumeroOperacional(numeroRomaneio, 'romaneio');
+  }
+
+  private normalizarNumeroOperacional(
+    numero: string | null | undefined,
+    campo: 'pedido' | 'romaneio',
+  ): string | null {
+    if (numero === undefined) {
+      return null;
+    }
+
+    if (numero === null) {
+      throw new BadRequestException(this.mensagemNumeroInvalido(campo));
+    }
+
+    const numeroNormalizado = numero.trim();
+
+    if (!numeroNormalizado) {
+      throw new BadRequestException(this.mensagemNumeroInvalido(campo));
+    }
+
+    if (!/^\d+$/.test(numeroNormalizado)) {
+      throw new BadRequestException(
+        this.mensagemNumeroSomenteNumeros(campo),
+      );
+    }
+
+    return numeroNormalizado;
+  }
+
+  private mensagemNumeroInvalido(campo: 'pedido' | 'romaneio'): string {
+    return campo === 'pedido'
+      ? 'Número do pedido inválido'
+      : 'Número do romaneio inválido';
+  }
+
+  private mensagemNumeroSomenteNumeros(campo: 'pedido' | 'romaneio'): string {
+    return campo === 'pedido'
+      ? 'Número do pedido deve conter somente números'
+      : 'Número do romaneio deve conter somente números';
+  }
+
+  private validarNumerosManuaisComCompraOrigem(
+    compraOrigemNumeroFolha: string | null,
+    numeroPedidoManual: string | null,
+    numeroRomaneioManual: string | null,
+  ): void {
+    if (!compraOrigemNumeroFolha) {
+      return;
+    }
+
+    if (
+      numeroPedidoManual !== null &&
+      numeroPedidoManual !== compraOrigemNumeroFolha
+    ) {
+      throw new BadRequestException(
+        'Número do pedido deve ser igual à folha da compra de origem',
+      );
+    }
+
+    if (
+      numeroRomaneioManual !== null &&
+      numeroRomaneioManual !== compraOrigemNumeroFolha
+    ) {
+      throw new BadRequestException(
+        'Número do romaneio deve ser igual à folha da compra de origem',
+      );
+    }
+  }
+
+  private async validarNumeroPedidoDisponivel(
+    tx: Prisma.TransactionClient,
+    numeroPedido: string,
+    vendaIdIgnorado?: string,
+  ): Promise<void> {
+    const where: Prisma.VendaWhereInput = {
+      numeroPedido,
+    };
+
+    if (vendaIdIgnorado) {
+      where.id = {
+        not: vendaIdIgnorado,
+      };
+    }
+
+    const vendaExistente = await tx.venda.findFirst({
+      where,
+      select: {
+        id: true,
+      },
+    });
+
+    if (vendaExistente) {
+      throw new ConflictException('Número do pedido já existe');
+    }
+  }
+
+  private async validarNumeroRomaneioDisponivel(
+    tx: Prisma.TransactionClient,
+    numeroRomaneio: string,
+    vendaIdIgnorado?: string,
+  ): Promise<void> {
+    const where: Prisma.VendaWhereInput = {
+      numeroRomaneio,
+    };
+
+    if (vendaIdIgnorado) {
+      where.id = {
+        not: vendaIdIgnorado,
+      };
+    }
+
+    const vendaExistente = await tx.venda.findFirst({
+      where,
+      select: {
+        id: true,
+      },
+    });
+
+    if (vendaExistente) {
+      throw new ConflictException('Número do romaneio já existe');
+    }
+  }
+
+  private lancarErroNumeroOperacionalDuplicadoSeNecessario(
+    error: unknown,
+  ): void {
+    if (
+      !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+      error.code !== 'P2002'
+    ) {
+      return;
+    }
+
+    if (this.erroUnicoContemCampo(error, 'numeroPedido')) {
+      throw new ConflictException('Número do pedido já existe');
+    }
+
+    if (this.erroUnicoContemCampo(error, 'numeroRomaneio')) {
+      throw new ConflictException('Número do romaneio já existe');
+    }
+  }
+
+  private erroUnicoContemCampo(
+    error: Prisma.PrismaClientKnownRequestError,
+    campo: 'numeroPedido' | 'numeroRomaneio',
+  ): boolean {
+    const target = error.meta?.target;
+
+    if (Array.isArray(target)) {
+      return target.some(
+        (item) => typeof item === 'string' && item.includes(campo),
+      );
+    }
+
+    return typeof target === 'string' && target.includes(campo);
+  }
+
   ////////////////////////////////////////////////////////////
   // PEDIDO
   ////////////////////////////////////////////////////////////
@@ -683,27 +875,35 @@ export class VendasService {
   private async gerarNumeroPedido(
     tx: Prisma.TransactionClient,
   ): Promise<string> {
-    const ultimoPedido = await tx.venda.findFirst({
+    const vendas = await tx.venda.findMany({
       where: {
         numeroPedido: {
           not: null,
         },
       },
 
-      orderBy: {
-        createdAt: 'desc',
+      select: {
+        numeroPedido: true,
       },
     });
 
-    if (!ultimoPedido?.numeroPedido) {
-      return '000001';
+    let maiorNumero = 0n;
+
+    for (const venda of vendas) {
+      const numeroPedido = venda.numeroPedido?.trim();
+
+      if (!numeroPedido || !/^\d+$/.test(numeroPedido)) {
+        continue;
+      }
+
+      const numero = BigInt(numeroPedido);
+
+      if (numero > maiorNumero) {
+        maiorNumero = numero;
+      }
     }
 
-    const numeroAtual = Number(ultimoPedido.numeroPedido);
-
-    const proximoNumero = numeroAtual + 1;
-
-    return String(proximoNumero).padStart(6, '0');
+    return (maiorNumero + 1n).toString().padStart(6, '0');
   }
 
   ////////////////////////////////////////////////////////////
@@ -713,27 +913,35 @@ export class VendasService {
   private async gerarNumeroRomaneio(
     tx: Prisma.TransactionClient,
   ): Promise<string> {
-    const ultimoRomaneio = await tx.venda.findFirst({
+    const vendas = await tx.venda.findMany({
       where: {
         numeroRomaneio: {
           not: null,
         },
       },
 
-      orderBy: {
-        createdAt: 'desc',
+      select: {
+        numeroRomaneio: true,
       },
     });
 
-    if (!ultimoRomaneio?.numeroRomaneio) {
-      return '000001';
+    let maiorNumero = 0n;
+
+    for (const venda of vendas) {
+      const numeroRomaneio = venda.numeroRomaneio?.trim();
+
+      if (!numeroRomaneio || !/^\d+$/.test(numeroRomaneio)) {
+        continue;
+      }
+
+      const numero = BigInt(numeroRomaneio);
+
+      if (numero > maiorNumero) {
+        maiorNumero = numero;
+      }
     }
 
-    const numeroAtual = Number(ultimoRomaneio.numeroRomaneio);
-
-    const proximoNumero = numeroAtual + 1;
-
-    return String(proximoNumero).padStart(6, '0');
+    return (maiorNumero + 1n).toString().padStart(6, '0');
   }
 
   ////////////////////////////////////////////////////////////
@@ -913,6 +1121,43 @@ export class VendasService {
         venda.localEntrega ||
         null;
 
+      const numeroPedido =
+        data.numeroPedido !== undefined
+          ? this.normalizarNumeroPedido(data.numeroPedido)
+          : venda.numeroPedido;
+
+      const numeroRomaneio =
+        data.numeroRomaneio !== undefined
+          ? this.normalizarNumeroRomaneio(data.numeroRomaneio)
+          : venda.numeroRomaneio;
+
+      if (!numeroPedido) {
+        throw new BadRequestException('Número do pedido inválido');
+      }
+
+      if (!numeroRomaneio) {
+        throw new BadRequestException('Número do romaneio inválido');
+      }
+
+      if (venda.compraOrigemId) {
+        const compraOrigemNumeroFolha =
+          venda.compraOrigem?.numeroFolha ?? venda.compraOrigemNumeroFolha;
+
+        this.validarNumerosManuaisComCompraOrigem(
+          compraOrigemNumeroFolha,
+          data.numeroPedido !== undefined ? numeroPedido : null,
+          data.numeroRomaneio !== undefined ? numeroRomaneio : null,
+        );
+      }
+
+      await this.validarNumeroPedidoDisponivel(tx, numeroPedido, venda.id);
+
+      await this.validarNumeroRomaneioDisponivel(
+        tx,
+        numeroRomaneio,
+        venda.id,
+      );
+
       const vendaAtualizada = await tx.venda.update({
         where: {
           id,
@@ -933,6 +1178,8 @@ export class VendasService {
             ? new Date(data.dataVenda)
             : venda.dataVenda,
 
+          numeroPedido,
+
           produto: data.produto ?? venda.produto,
 
           qualidade: data.qualidade ?? venda.qualidade,
@@ -942,6 +1189,8 @@ export class VendasService {
           telefone: telefoneVenda,
 
           localEntrega: localEntregaVenda,
+
+          numeroRomaneio,
 
           destino: data.destino ?? venda.destino,
 
@@ -1015,6 +1264,10 @@ export class VendasService {
 
           observacoes: data.observacoes ?? venda.observacoes,
         },
+      }).catch((error: unknown) => {
+        this.lancarErroNumeroOperacionalDuplicadoSeNecessario(error);
+
+        throw error;
       });
 
       await tx.transacao.update({
@@ -1033,7 +1286,7 @@ export class VendasService {
             ? new Date(data.dataVenda)
             : venda.dataVenda,
 
-          descricao: `Venda pedido ${venda.numeroPedido}`,
+          descricao: `Venda pedido ${numeroPedido}`,
         },
       });
 

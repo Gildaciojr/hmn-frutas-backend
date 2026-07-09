@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -180,7 +181,12 @@ export class ComprasService {
       //////////////////////////////////////////////////
       // COMPRA
       //////////////////////////////////////////////////
-      const numeroFolha = await this.gerarProximoNumeroFolha(tx);
+      const numeroFolhaManual = this.normalizarNumeroFolha(data.numeroFolha);
+
+      const numeroFolha =
+        numeroFolhaManual ?? (await this.gerarProximoNumeroFolha(tx));
+
+      await this.validarNumeroFolhaDisponivel(tx, numeroFolha);
 
       const compra = await tx.compra.create({
         data: {
@@ -319,6 +325,10 @@ export class ComprasService {
 
           observacoes: data.observacoes,
         },
+      }).catch((error: unknown): never => {
+        this.lancarErroNumeroFolhaDuplicadoSeNecessario(error);
+
+        throw error;
       });
 
       //////////////////////////////////////////////////
@@ -538,6 +548,18 @@ export class ComprasService {
 
       const valorTotal = this.calcularValorTotal(totalBruto, despesas);
 
+      const numeroFolha =
+        data.numeroFolha !== undefined
+          ? this.normalizarNumeroFolha(data.numeroFolha)
+          : compra.numeroFolha;
+
+      if (numeroFolha) {
+        await this.validarNumeroFolhaDisponivel(tx, numeroFolha, compra.id);
+      }
+
+      const numeroFolhaAlterado =
+        data.numeroFolha !== undefined && numeroFolha !== compra.numeroFolha;
+
       const compraAtualizada = await tx.compra.update({
         where: {
           id,
@@ -563,6 +585,8 @@ export class ComprasService {
           modeloCaminhao,
 
           placa: data.placa?.trim().toUpperCase() ?? compra.placa,
+
+          numeroFolha,
 
           ////////////////////////////////////////////////
           // CONTROLE INTERNO HMN
@@ -617,6 +641,10 @@ export class ComprasService {
 
           observacoes: data.observacoes ?? compra.observacoes,
         },
+      }).catch((error: unknown): never => {
+        this.lancarErroNumeroFolhaDuplicadoSeNecessario(error);
+
+        throw error;
       });
 
       await tx.transacao.update({
@@ -636,6 +664,10 @@ export class ComprasService {
           vencimento: data.dataCompra
             ? new Date(data.dataCompra)
             : compra.dataCompra,
+
+          descricao: numeroFolhaAlterado
+            ? `Compra Nº ${numeroFolha}`
+            : transacao.descricao,
         },
       });
 
@@ -973,17 +1005,105 @@ export class ComprasService {
       },
     });
 
-    let maiorNumero = 0;
+    let maiorNumero = 0n;
 
     for (const compra of compras) {
-      const numero = Number(compra.numeroFolha);
+      const numeroFolha = compra.numeroFolha?.trim();
 
-      if (!Number.isNaN(numero)) {
-        maiorNumero = Math.max(maiorNumero, numero);
+      if (!numeroFolha || !/^\d+$/.test(numeroFolha)) {
+        continue;
+      }
+
+      const numero = BigInt(numeroFolha);
+
+      if (numero > maiorNumero) {
+        maiorNumero = numero;
       }
     }
 
-    return String(maiorNumero + 1).padStart(6, '0');
+    return (maiorNumero + 1n).toString().padStart(6, '0');
+  }
+
+  private normalizarNumeroFolha(numeroFolha?: string | null): string | null {
+    if (numeroFolha === undefined) {
+      return null;
+    }
+
+    if (numeroFolha === null) {
+      throw new BadRequestException('Número da folha inválido');
+    }
+
+    const numeroNormalizado = numeroFolha.trim();
+
+    if (!numeroNormalizado) {
+      throw new BadRequestException('Número da folha inválido');
+    }
+
+    if (!/^\d+$/.test(numeroNormalizado)) {
+      throw new BadRequestException(
+        'Número da folha deve conter somente números',
+      );
+    }
+
+    return numeroNormalizado;
+  }
+
+  private async validarNumeroFolhaDisponivel(
+    tx: Prisma.TransactionClient,
+    numeroFolha: string,
+    compraIdIgnorado?: string,
+  ): Promise<void> {
+    const where: Prisma.CompraWhereInput = {
+      numeroFolha,
+    };
+
+    if (compraIdIgnorado) {
+      where.id = {
+        not: compraIdIgnorado,
+      };
+    }
+
+    const compraExistente = await tx.compra.findFirst({
+      where,
+
+      select: {
+        id: true,
+      },
+    });
+
+    if (compraExistente) {
+      throw new ConflictException('Número da folha já existe');
+    }
+  }
+
+  private lancarErroNumeroFolhaDuplicadoSeNecessario(error: unknown): void {
+    if (!this.isErroUnicoNumeroFolha(error)) {
+      return;
+    }
+
+    throw new ConflictException('Número da folha já existe');
+  }
+
+  private isErroUnicoNumeroFolha(error: unknown): boolean {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError)) {
+      return false;
+    }
+
+    if (error.code !== 'P2002') {
+      return false;
+    }
+
+    const target = error.meta?.target;
+
+    if (typeof target === 'string') {
+      return target.includes('numeroFolha');
+    }
+
+    if (Array.isArray(target)) {
+      return target.some((field: unknown): boolean => field === 'numeroFolha');
+    }
+
+    return false;
   }
 
   private validarCompra(data: CreateCompraDto): void {

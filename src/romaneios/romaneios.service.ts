@@ -6,6 +6,11 @@ import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 
 import { PrismaService } from '../prisma/prisma.service';
 
+import {
+  buildCompraRomaneioTemplate,
+  type CompraRomaneioData,
+} from './templates/compra-romaneio.template';
+
 import { buildVendaRomaneioTemplate } from './templates/venda-romaneio.template';
 
 const PdfPrinterClass = PdfPrinter as unknown as {
@@ -206,16 +211,130 @@ export class RomaneiosService {
     }
 
     ////////////////////////////////////////////////////////
-    // PLACEHOLDER
+    // TEMPLATE
     ////////////////////////////////////////////////////////
 
-    const docDefinition: TDocumentDefinitions = {
-      content: [
-        {
-          text: 'PDF de compra em modernização',
+    const compraRomaneioData: CompraRomaneioData = {
+      empresa: {
+        nome: 'HMN FRUTAS',
+
+        telefone:
+          'Hugo: (11) 96900-5002 | Miron: (62) 99909-8205 | Netinho: (62) 99962-5436',
+
+        endereco:
+          'Rua Henrique Tito, 459 - St. Centro - CEP 76335-000 - Uruana/GO',
+
+        email: 'hmnfrutas@gmail.com',
+
+        responsaveis: 'Hugo • Miron • Netinho',
+      },
+
+      compra: {
+        id: compra.id,
+
+        numeroFolha: compra.numeroFolha,
+
+        createdAt: compra.createdAt,
+
+        dataCompra: compra.dataCompra,
+
+        safra: compra.safra,
+
+        controleInterno: compra.controleInterno,
+
+        fornecedor: {
+          nome: compra.clienteNomeSnapshot,
+
+          telefone: compra.clienteTelefoneSnapshot,
+
+          documento: compra.clienteDocumentoSnapshot,
+
+          endereco: compra.clienteEnderecoSnapshot,
         },
-      ],
+
+        cliente: compra.cliente
+          ? {
+              id: compra.cliente.id,
+
+              nome: compra.cliente.nome,
+
+              telefone: compra.cliente.telefone,
+
+              documento: compra.cliente.cpf ?? compra.cliente.cnpj,
+
+              endereco: compra.cliente.endereco,
+
+              cidade: compra.cliente.cidade,
+
+              estado: compra.cliente.estado,
+            }
+          : null,
+
+        qualidadeFruta: compra.qualidadeFruta,
+
+        modeloCaminhao: compra.modeloCaminhao,
+
+        placa: compra.placa,
+
+        cargueiro: compra.cargueiro,
+
+        motoristaNome: compra.motoristaNome,
+
+        motoristaTelefone: compra.motoristaTelefone,
+
+        kgBruto: compra.kgBruto,
+
+        quantidadeFrutas: compra.quantidadeFrutas,
+
+        mediaFruta: compra.mediaFruta,
+
+        tipoDesconto: compra.tipoDesconto,
+
+        descontoPercentualAplicado: compra.descontoPercentualAplicado,
+
+        descontoKgManual: compra.descontoKgManual,
+
+        descontoKgCalculado: compra.descontoKgCalculado,
+
+        kgDescontado: compra.kgDescontado,
+
+        kgLiquido: compra.kgLiquido,
+
+        precoKg: compra.precoKg,
+
+        totalBruto: compra.totalBruto,
+
+        despesas: compra.despesas,
+
+        icmsOutros: compra.icmsOutros,
+
+        valorTotal: compra.valorTotal,
+
+        transacoes: compra.transacoes.map((transacao) => ({
+          id: transacao.id,
+
+          valor: transacao.valor,
+
+          valorPago: transacao.valorPago,
+
+          valorRestante: transacao.valorRestante,
+
+          statusFinanceiro: transacao.statusFinanceiro,
+
+          formaPagamento: transacao.formaPagamento,
+
+          vencimento: transacao.vencimento,
+
+          descricao: transacao.descricao,
+        })),
+
+        usuarioResponsavelNome: compra.usuarioResponsavelNome,
+
+        observacoes: compra.observacoes,
+      },
     };
+
+    const docDefinition = buildCompraRomaneioTemplate(compraRomaneioData);
 
     ////////////////////////////////////////////////////////
     // FONTS

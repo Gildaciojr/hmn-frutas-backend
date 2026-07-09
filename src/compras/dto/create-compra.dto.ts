@@ -234,6 +234,7 @@ export class CreateCompraDto {
 
   @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(50)
   numeroFolha?: string;
 
