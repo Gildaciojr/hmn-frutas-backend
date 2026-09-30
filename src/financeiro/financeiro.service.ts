@@ -1365,6 +1365,12 @@ export class FinanceiroService {
       throw new NotFoundException('Transação não encontrada');
     }
 
+    if (transacao.vendaId !== null && transacao.clienteId === null) {
+      throw new BadRequestException(
+        'Vincule um cliente à venda antes de registrar pagamento',
+      );
+    }
+
     ////////////////////////////////////////////////////////////
     // STATUS
     ////////////////////////////////////////////////////////////

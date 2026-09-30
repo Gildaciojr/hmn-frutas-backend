@@ -39,14 +39,33 @@ export class VendasService {
       // CLIENTE
       ////////////////////////////////////////////////////////
 
-      const cliente = await tx.cliente.findUnique({
-        where: {
-          id: data.clienteId,
-        },
-      });
+      if (data.clienteId === null) {
+        throw new BadRequestException(
+          'clienteId deve ser omitido ou conter um cliente válido',
+        );
+      }
 
-      if (!cliente) {
+      const cliente =
+        data.clienteId !== undefined
+          ? await tx.cliente.findUnique({
+              where: {
+                id: data.clienteId,
+              },
+            })
+          : null;
+
+      if (data.clienteId !== undefined && !cliente) {
         throw new NotFoundException('Cliente não encontrado');
+      }
+
+      if (
+        !cliente &&
+        data.statusPagamento !== undefined &&
+        data.statusPagamento !== StatusPagamento.PENDENTE
+      ) {
+        throw new BadRequestException(
+          'Venda sem cliente deve permanecer com pagamento pendente',
+        );
       }
 
       ////////////////////////////////////////////////////////
@@ -237,9 +256,7 @@ export class VendasService {
       // PEDIDO
       ////////////////////////////////////////////////////////
 
-      const numeroPedidoManual = this.normalizarNumeroPedido(
-        data.numeroPedido,
-      );
+      const numeroPedidoManual = this.normalizarNumeroPedido(data.numeroPedido);
 
       const numeroRomaneioManual = this.normalizarNumeroRomaneio(
         data.numeroRomaneio,
@@ -286,168 +303,170 @@ export class VendasService {
 
       const icmsOutrosOrigem = compraOrigem?.icmsOutros ?? icmsOutros;
 
-      const telefoneVenda = data.telefone?.trim() || cliente.telefone || null;
+      const telefoneVenda = data.telefone?.trim() || cliente?.telefone || null;
 
-      const cidadeVenda = data.cidade?.trim() || cliente.cidade || null;
+      const cidadeVenda = data.cidade?.trim() || cliente?.cidade || null;
 
       const localEntregaVenda =
         data.localEntrega?.trim() ||
-        [cliente.endereco, cliente.bairro].filter(Boolean).join(' • ') ||
+        [cliente?.endereco, cliente?.bairro].filter(Boolean).join(' • ') ||
         null;
 
       ////////////////////////////////////////////////////////
       // VENDA
       ////////////////////////////////////////////////////////
 
-      const venda = await tx.venda.create({
-        data: {
-          ////////////////////////////////////////////////////
-          // CLIENTE
-          ////////////////////////////////////////////////////
+      const venda = await tx.venda
+        .create({
+          data: {
+            ////////////////////////////////////////////////////
+            // CLIENTE
+            ////////////////////////////////////////////////////
 
-          clienteId: data.clienteId,
+            clienteId: cliente?.id ?? null,
 
-          //////////////////////////////////////////////////
-          // COMPRA ORIGEM
-          //////////////////////////////////////////////////
+            //////////////////////////////////////////////////
+            // COMPRA ORIGEM
+            //////////////////////////////////////////////////
 
-          compraOrigemId: compraOrigem?.id ?? null,
+            compraOrigemId: compraOrigem?.id ?? null,
 
-          compraOrigemNumeroFolha,
+            compraOrigemNumeroFolha,
 
-          ////////////////////////////////////////////////////
-          // SNAPSHOT CLIENTE
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // SNAPSHOT CLIENTE
+            ////////////////////////////////////////////////////
 
-          clienteNomeSnapshot: cliente.nome,
+            clienteNomeSnapshot: cliente?.nome ?? 'CLIENTE PENDENTE',
 
-          clienteTelefoneSnapshot: telefoneVenda,
+            clienteTelefoneSnapshot: cliente ? telefoneVenda : null,
 
-          clienteDocumentoSnapshot: cliente.cpf ?? cliente.cnpj ?? null,
+            clienteDocumentoSnapshot: cliente?.cpf ?? cliente?.cnpj ?? null,
 
-          clienteEnderecoSnapshot: cliente.endereco,
+            clienteEnderecoSnapshot: cliente?.endereco ?? null,
 
-          ////////////////////////////////////////////////////
-          // IDENTIFICAÇÃO
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // IDENTIFICAÇÃO
+            ////////////////////////////////////////////////////
 
-          dataVenda: data.dataVenda ? new Date(data.dataVenda) : new Date(),
+            dataVenda: data.dataVenda ? new Date(data.dataVenda) : new Date(),
 
-          numeroPedido,
+            numeroPedido,
 
-          produto: data.produto ?? 'Melancia',
+            produto: data.produto ?? 'Melancia',
 
-          qualidade,
+            qualidade,
 
-          cidade: cidadeVenda,
+            cidade: cidadeVenda,
 
-          telefone: telefoneVenda,
+            telefone: telefoneVenda,
 
-          localEntrega: localEntregaVenda,
+            localEntrega: localEntregaVenda,
 
-          ////////////////////////////////////////////////////
-          // ROMANEIO
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // ROMANEIO
+            ////////////////////////////////////////////////////
 
-          numeroRomaneio,
+            numeroRomaneio,
 
-          destino: data.destino,
+            destino: data.destino,
 
-          tipoFrete: data.tipoFrete,
+            tipoFrete: data.tipoFrete,
 
-          ////////////////////////////////////////////////////
-          // CAMINHÃO
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // CAMINHÃO
+            ////////////////////////////////////////////////////
 
-          placa: data.placa?.trim().toUpperCase(),
+            placa: data.placa?.trim().toUpperCase(),
 
-          modeloCaminhao: data.modeloCaminhao,
+            modeloCaminhao: data.modeloCaminhao,
 
-          ////////////////////////////////////////////////////
-          // MOTORISTA
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // MOTORISTA
+            ////////////////////////////////////////////////////
 
-          motoristaNome,
+            motoristaNome,
 
-          motoristaTelefone,
+            motoristaTelefone,
 
-          motoristaCpf: data.motoristaCpf,
+            motoristaCpf: data.motoristaCpf,
 
-          ////////////////////////////////////////////////////
-          // PESAGEM
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // PESAGEM
+            ////////////////////////////////////////////////////
 
-          pesoBruto,
+            pesoBruto,
 
-          pesoDesconto,
+            pesoDesconto,
 
-          pesoLiquido,
+            pesoLiquido,
 
-          quantidadeKg,
+            quantidadeKg,
 
-          quantidadeFrutas: data.quantidadeFrutas,
+            quantidadeFrutas: data.quantidadeFrutas,
 
-          mediaFruta,
+            mediaFruta,
 
-          ////////////////////////////////////////////////////
-          // FINANCEIRO
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // FINANCEIRO
+            ////////////////////////////////////////////////////
 
-          precoMelancia,
+            precoMelancia,
 
-          observacaoPreco: data.observacaoPreco,
+            observacaoPreco: data.observacaoPreco,
 
-          precoMercado,
+            precoMercado,
 
-          precoFrete,
+            precoFrete,
 
-          valorPorKg,
+            valorPorKg,
 
-          precoFinal,
+            precoFinal,
 
-          descontoFruta,
+            descontoFruta,
 
-          descontoValor,
+            descontoValor,
 
-          icmsOutros: icmsOutrosOrigem,
+            icmsOutros: icmsOutrosOrigem,
 
-          valorMelancia,
+            valorMelancia,
 
-          freteTotal,
+            freteTotal,
 
-          valorTotal,
+            valorTotal,
 
-          ////////////////////////////////////////////////////
-          // STATUS PAGAMENTO
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // STATUS PAGAMENTO
+            ////////////////////////////////////////////////////
 
-          statusPagamento: data.statusPagamento ?? StatusPagamento.PENDENTE,
+            statusPagamento: data.statusPagamento ?? StatusPagamento.PENDENTE,
 
-          ////////////////////////////////////////////////////
-          // STATUS OPERACIONAL
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // STATUS OPERACIONAL
+            ////////////////////////////////////////////////////
 
-          status: StatusVenda.ABERTA,
+            status: StatusVenda.ABERTA,
 
-          ////////////////////////////////////////////////////
-          // AUDITORIA
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // AUDITORIA
+            ////////////////////////////////////////////////////
 
-          usuarioResponsavelId: usuario.id,
+            usuarioResponsavelId: usuario.id,
 
-          usuarioResponsavelNome: usuario.nome,
+            usuarioResponsavelNome: usuario.nome,
 
-          ////////////////////////////////////////////////////
-          // OBSERVAÇÕES
-          ////////////////////////////////////////////////////
+            ////////////////////////////////////////////////////
+            // OBSERVAÇÕES
+            ////////////////////////////////////////////////////
 
-          observacoes: data.observacoes,
-        },
-      }).catch((error: unknown) => {
-        this.lancarErroNumeroOperacionalDuplicadoSeNecessario(error);
+            observacoes: data.observacoes,
+          },
+        })
+        .catch((error: unknown) => {
+          this.lancarErroNumeroOperacionalDuplicadoSeNecessario(error);
 
-        throw error;
-      });
+          throw error;
+        });
 
       ////////////////////////////////////////////////////////
       // FINANCEIRO
@@ -481,7 +500,7 @@ export class VendasService {
           // RELAÇÕES
           //////////////////////////////////////////////////////
 
-          clienteId: data.clienteId,
+          clienteId: cliente?.id ?? null,
 
           vendaId: venda.id,
 
@@ -732,9 +751,7 @@ export class VendasService {
     }
 
     if (!/^\d+$/.test(numeroNormalizado)) {
-      throw new BadRequestException(
-        this.mensagemNumeroSomenteNumeros(campo),
-      );
+      throw new BadRequestException(this.mensagemNumeroSomenteNumeros(campo));
     }
 
     return numeroNormalizado;
@@ -997,16 +1014,36 @@ export class VendasService {
         );
       }
 
-      const clienteId = data.clienteId ?? venda.clienteId;
+      if (data.clienteId === null) {
+        throw new BadRequestException(
+          'clienteId deve ser omitido ou conter um cliente válido',
+        );
+      }
 
-      const cliente = await tx.cliente.findUnique({
-        where: {
-          id: clienteId,
-        },
-      });
+      const clienteId =
+        data.clienteId !== undefined ? data.clienteId : venda.clienteId;
 
-      if (!cliente) {
+      const cliente =
+        clienteId !== null
+          ? await tx.cliente.findUnique({
+              where: {
+                id: clienteId,
+              },
+            })
+          : null;
+
+      if (clienteId !== null && !cliente) {
         throw new NotFoundException('Cliente não encontrado');
+      }
+
+      if (
+        clienteId === null &&
+        data.statusPagamento !== undefined &&
+        data.statusPagamento !== StatusPagamento.PENDENTE
+      ) {
+        throw new BadRequestException(
+          'Venda sem cliente deve permanecer com pagamento pendente',
+        );
       }
 
       const pesoBruto = data.pesoBruto ?? venda.pesoBruto;
@@ -1110,14 +1147,14 @@ export class VendasService {
       }
 
       const telefoneVenda =
-        data.telefone?.trim() || cliente.telefone || venda.telefone || null;
+        data.telefone?.trim() || cliente?.telefone || venda.telefone || null;
 
       const cidadeVenda =
-        data.cidade?.trim() || cliente.cidade || venda.cidade || null;
+        data.cidade?.trim() || cliente?.cidade || venda.cidade || null;
 
       const localEntregaVenda =
         data.localEntrega?.trim() ||
-        [cliente.endereco, cliente.bairro].filter(Boolean).join(' • ') ||
+        [cliente?.endereco, cliente?.bairro].filter(Boolean).join(' • ') ||
         venda.localEntrega ||
         null;
 
@@ -1152,123 +1189,122 @@ export class VendasService {
 
       await this.validarNumeroPedidoDisponivel(tx, numeroPedido, venda.id);
 
-      await this.validarNumeroRomaneioDisponivel(
-        tx,
-        numeroRomaneio,
-        venda.id,
-      );
+      await this.validarNumeroRomaneioDisponivel(tx, numeroRomaneio, venda.id);
 
-      const vendaAtualizada = await tx.venda.update({
-        where: {
-          id,
-        },
+      const vendaAtualizada = await tx.venda
+        .update({
+          where: {
+            id,
+          },
 
-        data: {
-          clienteId,
+          data: {
+            clienteId,
 
-          clienteNomeSnapshot: cliente.nome,
+            clienteNomeSnapshot: cliente?.nome ?? 'CLIENTE PENDENTE',
 
-          clienteTelefoneSnapshot: telefoneVenda,
+            clienteTelefoneSnapshot: cliente ? telefoneVenda : null,
 
-          clienteDocumentoSnapshot: cliente.cpf ?? cliente.cnpj ?? null,
+            clienteDocumentoSnapshot: cliente?.cpf ?? cliente?.cnpj ?? null,
 
-          clienteEnderecoSnapshot: cliente.endereco,
+            clienteEnderecoSnapshot: cliente?.endereco ?? null,
 
-          dataVenda: data.dataVenda
-            ? new Date(data.dataVenda)
-            : venda.dataVenda,
+            dataVenda: data.dataVenda
+              ? new Date(data.dataVenda)
+              : venda.dataVenda,
 
-          numeroPedido,
+            numeroPedido,
 
-          produto: data.produto ?? venda.produto,
+            produto: data.produto ?? venda.produto,
 
-          qualidade: data.qualidade ?? venda.qualidade,
+            qualidade: data.qualidade ?? venda.qualidade,
 
-          cidade: cidadeVenda,
+            cidade: cidadeVenda,
 
-          telefone: telefoneVenda,
+            telefone: telefoneVenda,
 
-          localEntrega: localEntregaVenda,
+            localEntrega: localEntregaVenda,
 
-          numeroRomaneio,
+            numeroRomaneio,
 
-          destino: data.destino ?? venda.destino,
+            destino: data.destino ?? venda.destino,
 
-          tipoFrete: data.tipoFrete ?? venda.tipoFrete,
+            tipoFrete: data.tipoFrete ?? venda.tipoFrete,
 
-          placa: data.placa?.trim().toUpperCase() ?? venda.placa,
+            placa: data.placa?.trim().toUpperCase() ?? venda.placa,
 
-          modeloCaminhao: data.modeloCaminhao ?? venda.modeloCaminhao,
+            modeloCaminhao: data.modeloCaminhao ?? venda.modeloCaminhao,
 
-          motoristaNome: data.motoristaNome ?? venda.motoristaNome,
+            motoristaNome: data.motoristaNome ?? venda.motoristaNome,
 
-          motoristaTelefone: data.motoristaTelefone ?? venda.motoristaTelefone,
+            motoristaTelefone:
+              data.motoristaTelefone ?? venda.motoristaTelefone,
 
-          motoristaCpf: data.motoristaCpf ?? venda.motoristaCpf,
+            motoristaCpf: data.motoristaCpf ?? venda.motoristaCpf,
 
-          pesoBruto,
+            pesoBruto,
 
-          pesoDesconto,
+            pesoDesconto,
 
-          pesoLiquido,
+            pesoLiquido,
 
-          quantidadeKg: pesoLiquido,
+            quantidadeKg: pesoLiquido,
 
-          quantidadeFrutas,
+            quantidadeFrutas,
 
-          mediaFruta,
+            mediaFruta,
 
-          precoMelancia,
+            precoMelancia,
 
-          observacaoPreco: data.observacaoPreco ?? venda.observacaoPreco,
+            observacaoPreco: data.observacaoPreco ?? venda.observacaoPreco,
 
-          precoMercado:
-            data.precoMercado !== undefined
-              ? new Prisma.Decimal(data.precoMercado)
-              : venda.precoMercado,
+            precoMercado:
+              data.precoMercado !== undefined
+                ? new Prisma.Decimal(data.precoMercado)
+                : venda.precoMercado,
 
-          precoFrete:
-            data.precoFrete !== undefined
-              ? new Prisma.Decimal(data.precoFrete)
-              : venda.precoFrete,
+            precoFrete:
+              data.precoFrete !== undefined
+                ? new Prisma.Decimal(data.precoFrete)
+                : venda.precoFrete,
 
-          valorPorKg: precoMelancia,
+            valorPorKg: precoMelancia,
 
-          precoFinal:
-            data.precoFinal !== undefined
-              ? new Prisma.Decimal(data.precoFinal)
-              : venda.precoFinal,
+            precoFinal:
+              data.precoFinal !== undefined
+                ? new Prisma.Decimal(data.precoFinal)
+                : venda.precoFinal,
 
-          descontoFruta:
-            data.descontoFruta !== undefined
-              ? new Prisma.Decimal(data.descontoFruta)
-              : venda.descontoFruta,
+            descontoFruta:
+              data.descontoFruta !== undefined
+                ? new Prisma.Decimal(data.descontoFruta)
+                : venda.descontoFruta,
 
-          descontoValor:
-            data.descontoValor !== undefined
-              ? new Prisma.Decimal(data.descontoValor)
-              : venda.descontoValor,
+            descontoValor:
+              data.descontoValor !== undefined
+                ? new Prisma.Decimal(data.descontoValor)
+                : venda.descontoValor,
 
-          icmsOutros:
-            data.icmsOutros !== undefined
-              ? new Prisma.Decimal(data.icmsOutros)
-              : venda.icmsOutros,
+            icmsOutros:
+              data.icmsOutros !== undefined
+                ? new Prisma.Decimal(data.icmsOutros)
+                : venda.icmsOutros,
 
-          valorMelancia,
+            valorMelancia,
 
-          freteTotal,
+            freteTotal,
 
-          valorTotal,
+            valorTotal,
 
-          statusPagamento: data.statusPagamento ?? venda.statusPagamento,
+            statusPagamento: data.statusPagamento ?? venda.statusPagamento,
 
-          observacoes: data.observacoes ?? venda.observacoes,
-        },
-      }).catch((error: unknown) => {
-        this.lancarErroNumeroOperacionalDuplicadoSeNecessario(error);
+            observacoes: data.observacoes ?? venda.observacoes,
+          },
+        })
+        .catch((error: unknown) => {
+          this.lancarErroNumeroOperacionalDuplicadoSeNecessario(error);
 
-        throw error;
-      });
+          throw error;
+        });
 
       await tx.transacao.update({
         where: {
@@ -1312,6 +1348,12 @@ export class VendasService {
       throw new NotFoundException('Venda não encontrada');
     }
 
+    if (!venda.clienteId && statusPagamento !== StatusPagamento.PENDENTE) {
+      throw new BadRequestException(
+        'Vincule um cliente à venda antes de registrar pagamento',
+      );
+    }
+
     return this.prisma.venda.update({
       where: {
         id,
@@ -1336,6 +1378,15 @@ export class VendasService {
 
     if (!venda) {
       throw new NotFoundException('Venda não encontrada');
+    }
+
+    if (
+      !venda.clienteId &&
+      (status === StatusVenda.FATURADA || status === StatusVenda.ENTREGUE)
+    ) {
+      throw new BadRequestException(
+        'Vincule um cliente à venda antes de faturar ou entregar',
+      );
     }
 
     return this.prisma.venda.update({

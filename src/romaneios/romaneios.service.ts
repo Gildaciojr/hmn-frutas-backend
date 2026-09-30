@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
 import PdfPrinter from 'pdfmake';
 
@@ -60,6 +64,12 @@ export class RomaneiosService {
       throw new NotFoundException('Venda não encontrada');
     }
 
+    if (!venda.clienteId || !venda.cliente) {
+      throw new BadRequestException(
+        'Vincule um cliente à venda antes de gerar o romaneio',
+      );
+    }
+
     ////////////////////////////////////////////////////////
     // FONTS
     ////////////////////////////////////////////////////////
@@ -108,7 +118,10 @@ export class RomaneiosService {
           responsaveis: 'Hugo • Miron • Netinho',
         },
 
-        venda,
+        venda: {
+          ...venda,
+          cliente: venda.cliente,
+        },
       });
 
       //////////////////////////////////////////////////////

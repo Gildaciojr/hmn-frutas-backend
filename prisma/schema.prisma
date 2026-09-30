@@ -414,9 +414,9 @@ model Venda {
   // RELAÇÃO
   //////////////////////////////////////////////////
 
-  clienteId String
+  clienteId String?
 
-  cliente Cliente @relation(fields: [clienteId], references: [id], onDelete: Restrict)
+  cliente Cliente? @relation(fields: [clienteId], references: [id], onDelete: Restrict)
 
   compraOrigemId String?
 

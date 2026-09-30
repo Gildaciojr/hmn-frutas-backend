@@ -256,7 +256,10 @@ export class EstoqueService {
       // CLIENTE
       //////////////////////////////////////////////////////
 
-      cliente: venda.cliente.nome,
+      cliente:
+        venda.cliente?.nome ??
+        venda.clienteNomeSnapshot ??
+        'CLIENTE PENDENTE',
 
       //////////////////////////////////////////////////////
       // PEDIDO

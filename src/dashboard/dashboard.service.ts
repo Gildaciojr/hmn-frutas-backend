@@ -514,11 +514,17 @@ export class DashboardService {
 
       numeroPedido: venda.numeroPedido,
 
-      cliente: {
-        id: venda.cliente.id,
+      cliente: venda.cliente
+        ? {
+            id: venda.cliente.id,
 
-        nome: venda.cliente.nome,
-      },
+            nome: venda.cliente.nome,
+          }
+        : {
+            id: null,
+
+            nome: venda.clienteNomeSnapshot || 'CLIENTE PENDENTE',
+          },
 
       dataVenda: venda.dataVenda,
 

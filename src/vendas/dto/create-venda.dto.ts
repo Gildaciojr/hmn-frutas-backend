@@ -20,8 +20,9 @@ export class CreateVendaDto {
   // CLIENTE
   //////////////////////////////////////////////////
 
+  @IsOptional()
   @IsString()
-  clienteId!: string;
+  clienteId?: string;
 
   //////////////////////////////////////////////////
   // COMPRA DE ORIGEM

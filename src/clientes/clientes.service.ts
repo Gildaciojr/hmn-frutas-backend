@@ -1011,7 +1011,12 @@ export class ClientesService {
     //////////////////////////////////////////////////////////
 
     for (const venda of vendas) {
-      mapaVendas.set(venda.clienteId, Number(venda._sum.pesoLiquido ?? 0));
+      if (venda.clienteId) {
+        mapaVendas.set(
+          venda.clienteId,
+          Number(venda._sum.pesoLiquido ?? 0),
+        );
+      }
     }
 
     //////////////////////////////////////////////////////////
