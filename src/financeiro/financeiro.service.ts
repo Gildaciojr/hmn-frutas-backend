@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -13,6 +14,17 @@ import {
   TipoTransacao,
 } from '@prisma/client';
 
+import {
+  assertFinancialConsistency,
+  financialDueOrder,
+  financialProjection,
+  isOverdue,
+  openFinancialStatuses,
+  paymentStatus,
+  serializableTransaction,
+  summarizeTitles,
+} from './financial-state';
+import type { RegistrarPagamentoDto } from './dto/registrar-pagamento.dto';
 import { AlertasService } from '../alertas/alertas.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -55,6 +67,7 @@ export class FinanceiroService {
         this.prisma.transacao.aggregate({
           where: {
             tipo: TipoTransacao.ENTRADA,
+            statusFinanceiro: { not: StatusFinanceiro.CANCELADO },
           },
 
           _sum: {
@@ -71,6 +84,7 @@ export class FinanceiroService {
         this.prisma.transacao.aggregate({
           where: {
             tipo: TipoTransacao.SAIDA,
+            statusFinanceiro: { not: StatusFinanceiro.CANCELADO },
           },
 
           _sum: {
@@ -85,6 +99,7 @@ export class FinanceiroService {
         //////////////////////////////////////////////////////////
 
         this.prisma.compra.aggregate({
+          where: { status: { not: StatusCompra.CANCELADA } },
           _sum: {
             valorTotal: true,
 
@@ -129,6 +144,36 @@ export class FinanceiroService {
     // FINANCEIRO
     ////////////////////////////////////////////////////////////
 
+    const [recebido, pago, receber, pagar] = await Promise.all([
+      this.prisma.pagamentoTransacao.aggregate({
+        where: { transacao: { tipo: TipoTransacao.ENTRADA } },
+        _sum: { valor: true },
+      }),
+      this.prisma.pagamentoTransacao.aggregate({
+        where: { transacao: { tipo: TipoTransacao.SAIDA } },
+        _sum: { valor: true },
+      }),
+      this.prisma.transacao.aggregate({
+        where: {
+          tipo: TipoTransacao.ENTRADA,
+          statusFinanceiro: { in: openFinancialStatuses },
+          valorRestante: { gt: 0 },
+        },
+        _sum: { valorRestante: true },
+      }),
+      this.prisma.transacao.aggregate({
+        where: {
+          tipo: TipoTransacao.SAIDA,
+          statusFinanceiro: { in: openFinancialStatuses },
+          valorRestante: { gt: 0 },
+        },
+        _sum: { valorRestante: true },
+      }),
+    ]);
+    const totalRecebido = Number(recebido._sum.valor ?? 0);
+    const totalPago = Number(pago._sum.valor ?? 0);
+    const totalAReceber = Number(receber._sum.valorRestante ?? 0);
+    const totalAPagar = Number(pagar._sum.valorRestante ?? 0);
     const totalEntradas = Number(entradasResult._sum.valor ?? 0);
 
     const totalSaidas = Number(saidasResult._sum.valor ?? 0);
@@ -177,11 +222,20 @@ export class FinanceiroService {
       //////////////////////////////////////////////////////////
 
       totalEntradas,
+      titulosEntrada: totalEntradas,
+      titulosSaida: totalSaidas,
+      totalRecebido,
+      totalPago,
+      totalAReceber,
+      totalAPagar,
+      resultadoCaixa: totalRecebido - totalPago,
+      diferencaOperacional: totalVendido - totalComprado,
 
       totalSaidas,
 
       saldo: totalEntradas - totalSaidas,
 
+      // Deprecated compatibility alias: operational difference, not profit.
       lucroBruto: totalVendido - totalComprado,
 
       //////////////////////////////////////////////////////////
@@ -238,56 +292,34 @@ export class FinanceiroService {
   // FLUXO
   ////////////////////////////////////////////////////////////
 
-  async fluxo(): Promise<
-    Prisma.TransacaoGetPayload<{
+  async fluxo() {
+    const events = await this.prisma.pagamentoTransacao.findMany({
       include: {
-        cliente: true;
-
-        fornecedor: true;
-
-        compra: true;
-
-        venda: true;
-      };
-    }>[]
-  > {
-    return this.prisma.transacao.findMany({
-      include: {
-        ////////////////////////////////////////////////////////
-        // CLIENTE
-        ////////////////////////////////////////////////////////
-
-        cliente: true,
-
-        ////////////////////////////////////////////////////////
-        // FORNECEDOR
-        ////////////////////////////////////////////////////////
-
-        fornecedor: true,
-
-        ////////////////////////////////////////////////////////
-        // COMPRA
-        ////////////////////////////////////////////////////////
-
-        compra: true,
-
-        ////////////////////////////////////////////////////////
-        // VENDA
-        ////////////////////////////////////////////////////////
-
-        venda: true,
+        transacao: {
+          include: {
+            cliente: true,
+            fornecedor: true,
+            compra: true,
+            venda: true,
+          },
+        },
       },
-
-      orderBy: {
-        createdAt: 'desc',
-      },
-
-      take: 300,
+      orderBy: [{ pagoEm: 'desc' }, { id: 'desc' }],
     });
+    return events.map((event) => ({
+      ...event.transacao,
+      id: event.id,
+      transacaoId: event.transacaoId,
+      valor: event.valor,
+      pagoEm: event.pagoEm,
+      formaPagamento: event.formaPagamento,
+      observacoes: event.observacoes,
+      createdAt: event.pagoEm,
+    }));
   }
 
   ////////////////////////////////////////////////////////////
-  // DADOS RELATÓRIO PRODUÇÃO
+  // DADOS RELATÓRIO PRODUÇÃO — unchanged operational source
   ////////////////////////////////////////////////////////////
 
   async obterDadosRelatorioProducao(
@@ -652,6 +684,7 @@ export class FinanceiroService {
           },
 
           include: {
+            pagamentos: true,
             ////////////////////////////////////////////////////////
             // CLIENTE
             ////////////////////////////////////////////////////////
@@ -689,23 +722,20 @@ export class FinanceiroService {
     // TOTAL PAGO
     ////////////////////////////////////////////////////////////
 
-    const totalPago = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valorPago ?? 0);
-    }, 0);
+    const financial = summarizeTitles(transacoes, TipoTransacao.ENTRADA);
+    const totalPago = financial.realizado;
 
     ////////////////////////////////////////////////////////////
     // TOTAL PENDENTE
     ////////////////////////////////////////////////////////////
 
-    const totalPendente = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valorRestante ?? 0);
-    }, 0);
+    const totalPendente = financial.aberto;
 
     ////////////////////////////////////////////////////////////
     // SALDO
     ////////////////////////////////////////////////////////////
 
-    const saldo = totalEntradas - totalSaidas;
+    const saldo = totalPendente;
 
     ////////////////////////////////////////////////////////////
     // RESPONSE
@@ -730,9 +760,14 @@ export class FinanceiroService {
       // RESUMO LEGADO
       //////////////////////////////////////////////////////////
 
-      totalComprado: totalSaidas,
+      totalComprado: compras
+        .filter((item) => item.status !== StatusCompra.CANCELADA)
+        .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+        .toNumber(),
 
-      totalVendido: totalEntradas,
+      totalVendido: vendas
+        .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+        .toNumber(),
 
       saldo,
 
@@ -746,8 +781,10 @@ export class FinanceiroService {
         totalSaidas,
 
         totalPago,
-
         totalPendente,
+        totalRecebido: financial.realizado,
+        totalAReceber: financial.aberto,
+        totalVencido: financial.vencido,
 
         saldoAtual: saldo,
       },
@@ -792,6 +829,10 @@ export class FinanceiroService {
         ////////////////////////////////////////////////////////
 
         vencimento: transacao.vencimento,
+        vencido:
+          openFinancialStatuses.includes(transacao.statusFinanceiro) &&
+          new Prisma.Decimal(transacao.valorRestante ?? 0).gt(0) &&
+          isOverdue(transacao.vencimento),
 
         pagoEm: transacao.pagoEm,
 
@@ -802,7 +843,6 @@ export class FinanceiroService {
         ////////////////////////////////////////////////////////
 
         descricao: transacao.descricao,
-
         referencia: transacao.referencia,
 
         observacoes: transacao.observacoes,
@@ -873,6 +913,7 @@ export class FinanceiroService {
       },
 
       include: {
+        pagamentos: true,
         //////////////////////////////////////////////////////
         // COMPRA
         //////////////////////////////////////////////////////
@@ -897,7 +938,7 @@ export class FinanceiroService {
 
     const pagamentosGranulares = await this.prisma.pagamentoTransacao.findMany({
       where: {
-        clienteId,
+        transacao: { clienteId, tipo: TipoTransacao.ENTRADA },
       },
 
       include: {
@@ -923,13 +964,10 @@ export class FinanceiroService {
     // TOTAIS
     ////////////////////////////////////////////////////////////
 
-    const totalPago = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valorPago ?? 0);
-    }, 0);
+    const financial = summarizeTitles(transacoes, TipoTransacao.ENTRADA);
+    const totalPago = financial.realizado;
 
-    const totalPendente = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valorRestante ?? 0);
-    }, 0);
+    const totalPendente = financial.aberto;
 
     ////////////////////////////////////////////////////////////
     // RESPONSE
@@ -956,8 +994,10 @@ export class FinanceiroService {
 
       resumo: {
         totalPago,
-
         totalPendente,
+        totalRecebido: financial.realizado,
+        totalAReceber: financial.aberto,
+        totalVencido: financial.vencido,
 
         quantidadeTransacoes: transacoes.length,
       },
@@ -1008,6 +1048,10 @@ export class FinanceiroService {
         ////////////////////////////////////////////////////////
 
         vencimento: transacao.vencimento,
+        vencido:
+          openFinancialStatuses.includes(transacao.statusFinanceiro) &&
+          new Prisma.Decimal(transacao.valorRestante ?? 0).gt(0) &&
+          isOverdue(transacao.vencimento),
 
         pagoEm: transacao.pagoEm,
 
@@ -1018,7 +1062,6 @@ export class FinanceiroService {
         ////////////////////////////////////////////////////////
 
         descricao: transacao.descricao,
-
         referencia: transacao.referencia,
 
         observacoes: transacao.observacoes,
@@ -1136,10 +1179,13 @@ export class FinanceiroService {
         statusFinanceiro: transacao.statusFinanceiro,
 
         descricao: transacao.descricao,
-
         referencia: transacao.referencia,
 
         vencimento: transacao.vencimento,
+        vencido:
+          openFinancialStatuses.includes(transacao.statusFinanceiro) &&
+          new Prisma.Decimal(transacao.valorRestante ?? 0).gt(0) &&
+          isOverdue(transacao.vencimento),
 
         pagoEm: transacao.pagoEm,
 
@@ -1200,8 +1246,9 @@ export class FinanceiroService {
         tipo: TipoTransacao.ENTRADA,
 
         statusFinanceiro: {
-          not: StatusFinanceiro.PAGO,
+          in: openFinancialStatuses,
         },
+        valorRestante: { gt: 0 },
       },
 
       include: {
@@ -1218,9 +1265,7 @@ export class FinanceiroService {
         venda: true,
       },
 
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: financialDueOrder,
     });
 
     return transacoes.map((transacao) => ({
@@ -1259,6 +1304,10 @@ export class FinanceiroService {
       //////////////////////////////////////////////////////////
 
       vencimento: transacao.vencimento,
+      vencido:
+        openFinancialStatuses.includes(transacao.statusFinanceiro) &&
+        new Prisma.Decimal(transacao.valorRestante ?? 0).gt(0) &&
+        isOverdue(transacao.vencimento),
 
       pagoEm: transacao.pagoEm,
 
@@ -1269,6 +1318,7 @@ export class FinanceiroService {
       //////////////////////////////////////////////////////////
 
       descricao: transacao.descricao,
+      referencia: transacao.referencia,
 
       //////////////////////////////////////////////////////////
       // CLIENTE
@@ -1294,8 +1344,9 @@ export class FinanceiroService {
         tipo: TipoTransacao.SAIDA,
 
         statusFinanceiro: {
-          not: StatusFinanceiro.PAGO,
+          in: openFinancialStatuses,
         },
+        valorRestante: { gt: 0 },
       },
 
       include: {
@@ -1314,9 +1365,7 @@ export class FinanceiroService {
         compra: true,
       },
 
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: financialDueOrder,
     });
 
     return transacoes.map((transacao) => ({
@@ -1355,6 +1404,10 @@ export class FinanceiroService {
       //////////////////////////////////////////////////////////
 
       vencimento: transacao.vencimento,
+      vencido:
+        openFinancialStatuses.includes(transacao.statusFinanceiro) &&
+        new Prisma.Decimal(transacao.valorRestante ?? 0).gt(0) &&
+        isOverdue(transacao.vencimento),
 
       pagoEm: transacao.pagoEm,
 
@@ -1365,6 +1418,7 @@ export class FinanceiroService {
       //////////////////////////////////////////////////////////
 
       descricao: transacao.descricao,
+      referencia: transacao.referencia,
 
       //////////////////////////////////////////////////////////
       // CLIENTE
@@ -1386,276 +1440,146 @@ export class FinanceiroService {
   // REGISTRAR PAGAMENTO
   ////////////////////////////////////////////////////////////
 
-  async registrarPagamento(
-    transacaoId: string,
-    data: {
-      valor: number;
-
-      formaPagamento: FormaPagamento;
-
-      pagoEm?: string;
-
-      vencimento?: string;
-
-      observacoes?: string;
-    },
-  ) {
-    ////////////////////////////////////////////////////////////
-    // VALIDAÇÃO VALOR
-    ////////////////////////////////////////////////////////////
-
-    if (!data.valor || data.valor <= 0) {
-      throw new BadRequestException('Valor do pagamento inválido');
-    }
-
-    ////////////////////////////////////////////////////////////
-    // TRANSAÇÃO
-    ////////////////////////////////////////////////////////////
-
-    const transacao = await this.prisma.transacao.findUnique({
-      where: {
-        id: transacaoId,
-      },
+  async registrarPagamento(transacaoId: string, data: RegistrarPagamentoDto) {
+    this.validatePayment(data);
+    return serializableTransaction(this.prisma, async (tx) => {
+      const transacao = await tx.transacao.findUnique({
+        where: { id: transacaoId },
+      });
+      if (!transacao) throw new NotFoundException('Transação não encontrada');
+      return this.applyPayment(tx, transacao, data);
     });
+  }
 
-    if (!transacao) {
-      throw new NotFoundException('Transação não encontrada');
+  private validatePayment(data: RegistrarPagamentoDto) {
+    if (
+      !Number.isFinite(data.valor) ||
+      data.valor <= 0 ||
+      !new Prisma.Decimal(data.valor).eq(
+        new Prisma.Decimal(data.valor).toDecimalPlaces(2),
+      )
+    ) {
+      throw new BadRequestException(
+        'Valor do pagamento deve ser positivo, com até duas casas decimais',
+      );
     }
+    if (!Object.values(FormaPagamento).includes(data.formaPagamento))
+      throw new BadRequestException('Forma de pagamento inválida');
+    if (
+      data.pagoEm &&
+      (!/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(data.pagoEm) ||
+        Number.isNaN(new Date(data.pagoEm).getTime()))
+    )
+      throw new BadRequestException('Instante de pagamento inválido');
+  }
 
-    if (transacao.vendaId !== null && transacao.clienteId === null) {
+  private async applyPayment(
+    tx: Prisma.TransactionClient,
+    transacao: Prisma.TransacaoGetPayload<Record<string, never>>,
+    data: RegistrarPagamentoDto,
+  ) {
+    if (transacao.vendaId && transacao.tipo !== TipoTransacao.ENTRADA)
+      throw new ConflictException('Título de venda deve ser ENTRADA');
+    if (transacao.statusFinanceiro === StatusFinanceiro.CANCELADO)
+      throw new ConflictException('Título cancelado não recebe pagamentos');
+    if (transacao.vendaId && !transacao.clienteId)
       throw new BadRequestException(
         'Vincule um cliente à venda antes de registrar pagamento',
       );
-    }
-
-    ////////////////////////////////////////////////////////////
-    // STATUS
-    ////////////////////////////////////////////////////////////
-
-    if (transacao.statusFinanceiro === StatusFinanceiro.PAGO) {
-      throw new BadRequestException('Esta transação já está quitada');
-    }
-
-    ////////////////////////////////////////////////////////////
-    // VALORES
-    ////////////////////////////////////////////////////////////
-
-    const valorTotal = new Prisma.Decimal(transacao.valor);
-
-    const valorPagoAtual = new Prisma.Decimal(transacao.valorPago ?? 0);
-
-    const novoPagamento = new Prisma.Decimal(data.valor);
-
-    ////////////////////////////////////////////////////////////
-    // NOVO VALOR PAGO
-    ////////////////////////////////////////////////////////////
-
-    const novoValorPago = valorPagoAtual.plus(novoPagamento);
-
-    ////////////////////////////////////////////////////////////
-    // OVERPAYMENT
-    ////////////////////////////////////////////////////////////
-
-    if (novoValorPago.greaterThan(valorTotal)) {
+    const aggregate = await tx.pagamentoTransacao.aggregate({
+      where: { transacaoId: transacao.id },
+      _sum: { valor: true },
+    });
+    const paid = new Prisma.Decimal(aggregate._sum.valor ?? 0);
+    const current = assertFinancialConsistency(transacao, paid);
+    const amount = new Prisma.Decimal(data.valor);
+    if (amount.gt(current.valorRestante))
       throw new BadRequestException(
         'Pagamento excede o valor restante da transação',
       );
-    }
-
-    ////////////////////////////////////////////////////////////
-    // RESTANTE
-    ////////////////////////////////////////////////////////////
-
-    const novoValorRestante = valorTotal.minus(novoValorPago);
-
-    ////////////////////////////////////////////////////////////
-    // STATUS AUTOMÁTICO
-    ////////////////////////////////////////////////////////////
-
-    let novoStatus: StatusFinanceiro;
-
-    if (novoValorPago.equals(0)) {
-      novoStatus = StatusFinanceiro.PENDENTE;
-    } else if (
-      novoValorPago.greaterThan(0) &&
-      novoValorRestante.greaterThan(0)
-    ) {
-      novoStatus = StatusFinanceiro.PARCIAL;
-    } else {
-      novoStatus = StatusFinanceiro.PAGO;
-    }
-
-    ////////////////////////////////////////////////////////////
-    // HISTÓRICO PAGAMENTO
-    ////////////////////////////////////////////////////////////
-
-    const historicoPagamento = [
-      '',
+    const projection = financialProjection(transacao.valor, paid.add(amount));
+    const paidAt = data.pagoEm ? new Date(data.pagoEm) : new Date();
+    const pagamento = await tx.pagamentoTransacao.create({
+      data: {
+        transacaoId: transacao.id,
+        clienteId: transacao.clienteId,
+        fornecedorId: transacao.fornecedorId,
+        valor: amount,
+        valorRestanteApos: projection.valorRestante,
+        formaPagamento: data.formaPagamento,
+        pagoEm: paidAt,
+        vencimento: data.vencimento
+          ? new Date(data.vencimento)
+          : transacao.vencimento,
+        observacoes: data.observacoes,
+      },
+    });
+    // Projection of the latest payment instant, including backdated entries.
+    const latest = await tx.pagamentoTransacao.findFirst({
+      where: { transacaoId: transacao.id },
+      orderBy: [{ pagoEm: 'desc' }, { id: 'desc' }],
+    });
+    const historico = [
       '[PAGAMENTO REGISTRADO]',
-      `Valor: R$ ${Number(data.valor).toLocaleString('pt-BR', {
-        minimumFractionDigits: 2,
-      })}`,
-      `Forma: ${data.formaPagamento}`,
-      `Data: ${data.pagoEm ?? new Date().toISOString()}`,
-      data.observacoes ? `Obs: ${data.observacoes}` : null,
+      'Valor: R$ ' + amount.toFixed(2),
+      'Forma: ' + data.formaPagamento,
+      'Data: ' + paidAt.toISOString(),
+      data.observacoes,
     ]
       .filter(Boolean)
       .join('\n');
-
-    ////////////////////////////////////////////////////////////
-    // TRANSACTION
-    ////////////////////////////////////////////////////////////
-
-    return this.prisma.$transaction(async (tx) => {
-      //////////////////////////////////////////////////////////
-      // REGISTRA PAGAMENTO GRANULAR
-      //////////////////////////////////////////////////////////
-
-      const pagamento = await tx.pagamentoTransacao.create({
-        data: {
-          //////////////////////////////////////////////////////
-          // RELAÇÕES
-          //////////////////////////////////////////////////////
-
-          transacaoId: transacao.id,
-
-          clienteId: transacao.clienteId,
-
-          fornecedorId: transacao.fornecedorId,
-
-          //////////////////////////////////////////////////////
-          // VALORES
-          //////////////////////////////////////////////////////
-
-          valor: novoPagamento,
-
-          valorRestanteApos: novoValorRestante,
-
-          //////////////////////////////////////////////////////
-          // PAGAMENTO
-          //////////////////////////////////////////////////////
-
-          formaPagamento: data.formaPagamento,
-
-          ////////////////////////////////////////////////////
-          // DATAS
-          ////////////////////////////////////////////////////
-
-          pagoEm: data.pagoEm ? new Date(data.pagoEm) : new Date(),
-
-          vencimento: data.vencimento ? new Date(data.vencimento) : null,
-
-          //////////////////////////////////////////////////////
-          // OBSERVAÇÕES
-          //////////////////////////////////////////////////////
-
-          observacoes: data.observacoes,
-        },
-      });
-
-      //////////////////////////////////////////////////////////
-      // UPDATE TRANSAÇÃO
-      //////////////////////////////////////////////////////////
-
-      const transacaoAtualizada = await tx.transacao.update({
-        where: {
-          id: transacaoId,
-        },
-
-        data: {
-          //////////////////////////////////////////////////////
-          // PAGAMENTO
-          //////////////////////////////////////////////////////
-
-          formaPagamento: data.formaPagamento,
-
-          pagoEm: data.pagoEm ? new Date(data.pagoEm) : new Date(),
-
-          //////////////////////////////////////////////////////
-          // VALORES
-          //////////////////////////////////////////////////////
-
-          valorPago: novoValorPago,
-
-          valorRestante: novoValorRestante,
-
-          //////////////////////////////////////////////////////
-          // STATUS
-          //////////////////////////////////////////////////////
-
-          statusFinanceiro: novoStatus,
-
-          //////////////////////////////////////////////////////
-          // OBSERVAÇÕES
-          //////////////////////////////////////////////////////
-
-          observacoes: transacao.observacoes
-            ? `${transacao.observacoes}\n${historicoPagamento}`
-            : historicoPagamento,
-        },
-
-        include: {
-          //////////////////////////////////////////////////////
-          // CLIENTE
-          //////////////////////////////////////////////////////
-
-          cliente: true,
-
-          //////////////////////////////////////////////////////
-          // COMPRA
-          //////////////////////////////////////////////////////
-
-          compra: true,
-
-          //////////////////////////////////////////////////////
-          // VENDA
-          //////////////////////////////////////////////////////
-
-          venda: true,
-
-          //////////////////////////////////////////////////////
-          // PAGAMENTOS
-          //////////////////////////////////////////////////////
-
-          pagamentos: {
-            orderBy: {
-              createdAt: 'desc',
-            },
-          },
-        },
-      });
-
-      //////////////////////////////////////////////////////////
-      // SINCRONIZA STATUS VENDA
-      //////////////////////////////////////////////////////////
-
-      if (transacao.vendaId) {
-        await tx.venda.update({
-          where: {
-            id: transacao.vendaId,
-          },
-
-          data: {
-            statusPagamento:
-              novoStatus === StatusFinanceiro.PAGO
-                ? 'PAGO'
-                : novoStatus === StatusFinanceiro.PARCIAL
-                  ? 'PARCIAL'
-                  : 'PENDENTE',
-          },
-        });
-      }
-
-      //////////////////////////////////////////////////////////
-      // RESPONSE
-      //////////////////////////////////////////////////////////
-
-      return {
-        ...transacaoAtualizada,
-
-        pagamentoRegistrado: pagamento,
-      };
+    const updated = await tx.transacao.update({
+      where: { id: transacao.id },
+      data: {
+        ...projection,
+        pagoEm: latest?.pagoEm ?? paidAt,
+        formaPagamento: latest?.formaPagamento ?? data.formaPagamento,
+        observacoes: [transacao.observacoes, historico]
+          .filter(Boolean)
+          .join('\n'),
+      },
+      include: {
+        cliente: true,
+        compra: true,
+        venda: true,
+        pagamentos: { orderBy: [{ pagoEm: 'desc' }, { id: 'desc' }] },
+      },
     });
+    if (transacao.vendaId) {
+      const related = await tx.transacao.findMany({
+        where: {
+          vendaId: transacao.vendaId,
+          tipo: TipoTransacao.ENTRADA,
+          statusFinanceiro: { not: StatusFinanceiro.CANCELADO },
+        },
+        include: { pagamentos: true },
+      });
+      for (const title of related)
+        assertFinancialConsistency(
+          title,
+          title.pagamentos.reduce(
+            (sum, event) => sum.add(event.valor),
+            new Prisma.Decimal(0),
+          ),
+        );
+      const total = related.reduce(
+        (sum, title) => sum.add(title.valor),
+        new Prisma.Decimal(0),
+      );
+      const received = related.reduce(
+        (sum, title) => sum.add(title.valorPago ?? 0),
+        new Prisma.Decimal(0),
+      );
+      await tx.venda.update({
+        where: { id: transacao.vendaId },
+        data: {
+          statusPagamento: paymentStatus(
+            financialProjection(total, received).statusFinanceiro,
+          ),
+        },
+      });
+    }
+    return { ...updated, pagamentoRegistrado: pagamento };
   }
 
   ////////////////////////////////////////////////////////////
@@ -1739,49 +1663,19 @@ export class FinanceiroService {
     // VALOR PAGO
     ////////////////////////////////////////////////////////////
 
-    const valorPago =
-      data.valorPago !== undefined
-        ? new Prisma.Decimal(data.valorPago)
-        : new Prisma.Decimal(0);
-
-    ////////////////////////////////////////////////////////////
-    // VALOR RESTANTE
-    ////////////////////////////////////////////////////////////
-
-    const valorRestante =
-      data.valorRestante !== undefined
-        ? new Prisma.Decimal(data.valorRestante)
-        : valorDecimal.minus(valorPago);
-
-    ////////////////////////////////////////////////////////////
-    // OVERPAYMENT
-    ////////////////////////////////////////////////////////////
-
-    if (valorPago.greaterThan(valorDecimal)) {
+    if (
+      data.valorPago !== undefined ||
+      data.valorRestante !== undefined ||
+      data.statusFinanceiro !== undefined ||
+      data.pagoEm !== undefined
+    ) {
       throw new BadRequestException(
-        'Valor pago não pode ser maior que o valor total',
+        'Projeções financeiras não são entrada manual. Registre a baixa pelo fluxo de pagamento.',
       );
     }
-
-    ////////////////////////////////////////////////////////////
-    // STATUS AUTOMÁTICO
-    ////////////////////////////////////////////////////////////
-
-    let statusFinanceiro: StatusFinanceiro;
-
-    if (data.statusFinanceiro) {
-      statusFinanceiro = data.statusFinanceiro;
-    } else if (valorPago.equals(0)) {
-      statusFinanceiro = StatusFinanceiro.PENDENTE;
-    } else if (valorPago.greaterThan(0) && valorRestante.greaterThan(0)) {
-      statusFinanceiro = StatusFinanceiro.PARCIAL;
-    } else {
-      statusFinanceiro = StatusFinanceiro.PAGO;
-    }
-
-    ////////////////////////////////////////////////////////////
-    // CREATE
-    ////////////////////////////////////////////////////////////
+    const valorPago = new Prisma.Decimal(0);
+    const valorRestante = valorDecimal;
+    const statusFinanceiro = StatusFinanceiro.PENDENTE;
 
     return this.prisma.transacao.create({
       data: {
@@ -1899,17 +1793,18 @@ export class FinanceiroService {
       },
     });
 
-    const totalComprado = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valor ?? 0);
-    }, 0);
+    const purchases = await this.prisma.compra.findMany({
+      where: { fornecedorId, status: { not: StatusCompra.CANCELADA } },
+      select: { valorTotal: true },
+    });
+    const totalComprado = purchases
+      .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+      .toNumber();
 
-    const totalPago = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valorPago ?? 0);
-    }, 0);
+    const financial = summarizeTitles(transacoes, TipoTransacao.SAIDA);
+    const totalPago = financial.realizado;
 
-    const saldoDevedor = transacoes.reduce((acc, transacao) => {
-      return acc + Number(transacao.valorRestante ?? 0);
-    }, 0);
+    const saldoDevedor = financial.aberto;
 
     const limiteFinanceiro = Number(fornecedor.limiteFinanceiroValor ?? 0);
 
@@ -1919,30 +1814,6 @@ export class FinanceiroService {
     // ALERTA LIMITE FINANCEIRO
     ////////////////////////////////////////////////////////////
 
-    if (fornecedor.limiteFinanceiroValor && percentualLimite >= 80) {
-      await this.alertasService.criarOuAtualizar({
-        categoria: 'LIMITE_FINANCEIRO',
-
-        severidade:
-          percentualLimite >= 100
-            ? 'CRITICA'
-            : percentualLimite >= 90
-              ? 'ALTA'
-              : 'MEDIA',
-
-        fornecedorId: fornecedor.id,
-
-        titulo:
-          percentualLimite >= 100
-            ? 'Limite financeiro ultrapassado'
-            : 'Limite financeiro próximo',
-
-        mensagem:
-          percentualLimite >= 100
-            ? `Fornecedor atingiu ${percentualLimite.toFixed(1)}% do limite financeiro.`
-            : `Fornecedor atingiu ${percentualLimite.toFixed(1)}% do limite financeiro.`,
-      });
-    }
     return {
       fornecedor,
 
@@ -1952,6 +1823,8 @@ export class FinanceiroService {
         totalPago,
 
         saldoDevedor,
+        totalAPagar: saldoDevedor,
+        totalVencido: financial.vencido,
 
         limiteFinanceiro,
 
@@ -1979,7 +1852,7 @@ export class FinanceiroService {
 
     const pagamentos = await this.prisma.pagamentoTransacao.findMany({
       where: {
-        fornecedorId,
+        transacao: { fornecedorId, tipo: TipoTransacao.SAIDA },
       },
 
       include: {
@@ -1991,7 +1864,7 @@ export class FinanceiroService {
       },
 
       orderBy: {
-        createdAt: 'desc',
+        pagoEm: 'desc',
       },
     });
 
@@ -2018,182 +1891,55 @@ export class FinanceiroService {
 
   async registrarPagamentoFornecedor(
     fornecedorId: string,
-    data: {
-      valor: number;
-
-      formaPagamento: FormaPagamento;
-
-      pagoEm?: string;
-
-      vencimento?: string;
-
-      observacoes?: string;
-    },
+    data: RegistrarPagamentoDto,
   ) {
-    ////////////////////////////////////////////////////////////
-    // VALIDAÇÃO
-    ////////////////////////////////////////////////////////////
-
-    if (!data.valor || data.valor <= 0) {
-      throw new BadRequestException('Valor inválido');
-    }
-
-    ////////////////////////////////////////////////////////////
-    // FORNECEDOR
-    ////////////////////////////////////////////////////////////
-
-    const fornecedor = await this.prisma.fornecedor.findUnique({
-      where: {
-        id: fornecedorId,
-      },
-    });
-
-    if (!fornecedor) {
-      throw new NotFoundException('Fornecedor não encontrado');
-    }
-
-    ////////////////////////////////////////////////////////////
-    // TRANSAÇÕES EM ABERTO
-    ////////////////////////////////////////////////////////////
-
-    const transacoes = await this.prisma.transacao.findMany({
-      where: {
-        fornecedorId,
-
-        tipo: TipoTransacao.SAIDA,
-
-        statusFinanceiro: {
-          not: StatusFinanceiro.PAGO,
+    this.validatePayment(data);
+    return serializableTransaction(this.prisma, async (tx) => {
+      const payload = {
+        ...data,
+        pagoEm: data.pagoEm ?? new Date().toISOString(),
+      };
+      const fornecedor = await tx.fornecedor.findUnique({
+        where: { id: fornecedorId },
+      });
+      if (!fornecedor) throw new NotFoundException('Fornecedor não encontrado');
+      const titles = await tx.transacao.findMany({
+        where: {
+          fornecedorId,
+          tipo: TipoTransacao.SAIDA,
+          statusFinanceiro: { in: openFinancialStatuses },
+          valorRestante: { gt: 0 },
         },
-      },
-
-      orderBy: {
-        createdAt: 'asc',
-      },
-    });
-
-    if (transacoes.length === 0) {
-      throw new BadRequestException('Fornecedor não possui débitos pendentes');
-    }
-
-    ////////////////////////////////////////////////////////////
-    // TRANSACTION
-    ////////////////////////////////////////////////////////////
-
-    return this.prisma.$transaction(async (tx) => {
-      let saldoPagamento = new Prisma.Decimal(data.valor);
-
+        orderBy: financialDueOrder,
+      });
+      if (!titles.length)
+        throw new BadRequestException(
+          'Fornecedor não possui débitos pendentes',
+        );
+      const total = titles.reduce(
+        (sum, title) => sum.add(title.valorRestante ?? 0),
+        new Prisma.Decimal(0),
+      );
+      let remaining = new Prisma.Decimal(data.valor);
+      if (remaining.gt(total))
+        throw new BadRequestException(
+          'Pagamento excede o total em aberto do fornecedor',
+        );
       const transacoesAtualizadas: string[] = [];
-
-      //////////////////////////////////////////////////////////
-      // FIFO
-      //////////////////////////////////////////////////////////
-
-      for (const transacao of transacoes) {
-        if (saldoPagamento.lte(0)) {
-          break;
-        }
-
-        const valorRestanteAtual = new Prisma.Decimal(
-          transacao.valorRestante ?? 0,
-        );
-
-        if (valorRestanteAtual.lte(0)) {
-          continue;
-        }
-
-        ////////////////////////////////////////////////////////
-        // VALOR APLICADO
-        ////////////////////////////////////////////////////////
-
-        const valorAplicado = saldoPagamento.greaterThan(valorRestanteAtual)
-          ? valorRestanteAtual
-          : saldoPagamento;
-
-        ////////////////////////////////////////////////////////
-        // NOVOS VALORES
-        ////////////////////////////////////////////////////////
-
-        const novoValorPago = new Prisma.Decimal(transacao.valorPago ?? 0).plus(
-          valorAplicado,
-        );
-
-        const novoValorRestante = valorRestanteAtual.minus(valorAplicado);
-
-        ////////////////////////////////////////////////////////
-        // STATUS
-        ////////////////////////////////////////////////////////
-
-        let novoStatus: StatusFinanceiro;
-
-        if (novoValorRestante.equals(0)) {
-          novoStatus = StatusFinanceiro.PAGO;
-        } else {
-          novoStatus = StatusFinanceiro.PARCIAL;
-        }
-
-        ////////////////////////////////////////////////////////
-        // PAGAMENTO GRANULAR
-        ////////////////////////////////////////////////////////
-
-        await tx.pagamentoTransacao.create({
-          data: {
-            transacaoId: transacao.id,
-
-            fornecedorId,
-
-            valor: valorAplicado,
-
-            valorRestanteApos: novoValorRestante,
-
-            formaPagamento: data.formaPagamento,
-
-            pagoEm: data.pagoEm ? new Date(data.pagoEm) : new Date(),
-
-            vencimento: data.vencimento ? new Date(data.vencimento) : null,
-
-            observacoes: data.observacoes,
-          },
+      for (const title of titles) {
+        if (remaining.isZero()) break;
+        const amount = Prisma.Decimal.min(remaining, title.valorRestante ?? 0);
+        await this.applyPayment(tx, title, {
+          ...payload,
+          valor: amount.toNumber(),
         });
-
-        ////////////////////////////////////////////////////////
-        // UPDATE TRANSAÇÃO
-        ////////////////////////////////////////////////////////
-
-        await tx.transacao.update({
-          where: {
-            id: transacao.id,
-          },
-
-          data: {
-            valorPago: novoValorPago,
-
-            valorRestante: novoValorRestante,
-
-            formaPagamento: data.formaPagamento,
-
-            pagoEm: data.pagoEm ? new Date(data.pagoEm) : new Date(),
-
-            statusFinanceiro: novoStatus,
-          },
-        });
-
-        transacoesAtualizadas.push(transacao.id);
-
-        saldoPagamento = saldoPagamento.minus(valorAplicado);
+        remaining = remaining.minus(amount);
+        transacoesAtualizadas.push(title.id);
       }
-
-      //////////////////////////////////////////////////////////
-      // RESPONSE
-      //////////////////////////////////////////////////////////
-
       return {
         fornecedorId,
-
-        valorRecebido: Number(data.valor),
-
-        valorNaoUtilizado: Number(saldoPagamento),
-
+        valorRecebido: data.valor,
+        valorNaoUtilizado: remaining.toNumber(),
         transacoesAtualizadas,
       };
     });

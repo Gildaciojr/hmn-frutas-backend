@@ -2,12 +2,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 
 import {
   Cliente,
+  Prisma,
+  TipoTransacao,
   Compra,
   PagamentoTransacao,
   Transacao,
   Venda,
 } from '@prisma/client';
 
+import { summarizeTitles } from '../financeiro/financial-state';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateClienteDto } from './dto/create-cliente.dto';
@@ -262,6 +265,12 @@ export class ClientesService {
     })[];
 
     resumo: {
+      totalRecebido: number;
+      totalAReceber: number;
+      totalVencido: number;
+      quantidadeOperacoes: number;
+      ultimaVenda: Date | null;
+      ultimoPagamento: Date | null;
       ////////////////////////////////////////////////////////
       // FINANCEIRO
       ////////////////////////////////////////////////////////
@@ -323,6 +332,7 @@ export class ClientesService {
       this.prisma.compra.findMany({
         where: {
           clienteId,
+          status: { not: 'CANCELADA' },
         },
 
         orderBy: {
@@ -337,6 +347,7 @@ export class ClientesService {
       this.prisma.venda.findMany({
         where: {
           clienteId,
+          status: { not: 'CANCELADA' },
         },
 
         orderBy: {
@@ -354,6 +365,7 @@ export class ClientesService {
         },
 
         include: {
+          pagamentos: { orderBy: [{ pagoEm: 'desc' }, { id: 'desc' }] },
           ////////////////////////////////////////////////////
           // CLIENTE
           ////////////////////////////////////////////////////
@@ -384,7 +396,7 @@ export class ClientesService {
 
       this.prisma.pagamentoTransacao.findMany({
         where: {
-          clienteId,
+          transacao: { clienteId, tipo: TipoTransacao.ENTRADA },
         },
 
         include: {
@@ -404,7 +416,7 @@ export class ClientesService {
         },
 
         orderBy: {
-          createdAt: 'desc',
+          pagoEm: 'desc',
         },
       }),
     ]);
@@ -413,67 +425,24 @@ export class ClientesService {
     // FINANCEIRO
     //////////////////////////////////////////////////////////
 
-    let totalCompras = 0;
-
-    let totalVendas = 0;
-
-    let totalPago = 0;
-
-    let totalPendente = 0;
-
-    let totalParcial = 0;
-
-    //////////////////////////////////////////////////////////
-    // TRANSAÇÕES
-    //////////////////////////////////////////////////////////
-
-    for (const transacao of transacoes) {
-      ////////////////////////////////////////////////////////
-      // VALORES
-      ////////////////////////////////////////////////////////
-
-      const valor = Number(transacao.valor ?? 0);
-
-      const valorPago = Number(transacao.valorPago ?? 0);
-
-      const valorRestante = Number(transacao.valorRestante ?? 0);
-
-      ////////////////////////////////////////////////////////
-      // SAÍDA
-      ////////////////////////////////////////////////////////
-
-      if (transacao.tipo === 'SAIDA') {
-        totalCompras += valor;
-      }
-
-      ////////////////////////////////////////////////////////
-      // ENTRADA
-      ////////////////////////////////////////////////////////
-
-      if (transacao.tipo === 'ENTRADA') {
-        totalVendas += valor;
-      }
-
-      ////////////////////////////////////////////////////////
-      // TOTAL PAGO
-      ////////////////////////////////////////////////////////
-
-      totalPago += valorPago;
-
-      ////////////////////////////////////////////////////////
-      // TOTAL PENDENTE
-      ////////////////////////////////////////////////////////
-
-      totalPendente += valorRestante;
-
-      ////////////////////////////////////////////////////////
-      // PARCIAL
-      ////////////////////////////////////////////////////////
-
-      if (valorPago > 0 && valorRestante > 0) {
-        totalParcial += valorRestante;
-      }
-    }
+    const financial = summarizeTitles(transacoes, TipoTransacao.ENTRADA);
+    const totalCompras = compras
+      .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+      .toNumber();
+    const totalVendas = vendas
+      .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+      .toNumber();
+    const totalPago = financial.realizado;
+    const totalPendente = financial.aberto;
+    const totalParcial = financial.parcial;
+    const extra = {
+      totalRecebido: financial.realizado,
+      totalAReceber: financial.aberto,
+      totalVencido: financial.vencido,
+      quantidadeOperacoes: vendas.length,
+      ultimaVenda: vendas[0]?.dataVenda ?? null,
+      ultimoPagamento: financial.ultimoPagamento,
+    };
 
     //////////////////////////////////////////////////////////
     // KG COMPRADO
@@ -488,7 +457,7 @@ export class ClientesService {
     //////////////////////////////////////////////////////////
 
     const totalKgVendido = vendas.reduce((acc, venda) => {
-      return acc + Number(venda.pesoBruto ?? 0);
+      return acc + Number(venda.pesoLiquido ?? 0);
     }, 0);
 
     //////////////////////////////////////////////////////////
@@ -531,7 +500,8 @@ export class ClientesService {
 
         totalVendas,
 
-        saldo: totalVendas - totalCompras,
+        saldo: totalPendente,
+        ...extra,
 
         totalPago,
 
@@ -568,6 +538,12 @@ export class ClientesService {
     cliente: Cliente;
 
     resumo: {
+      totalRecebido: number;
+      totalAReceber: number;
+      totalVencido: number;
+      quantidadeOperacoes: number;
+      ultimaVenda: Date | null;
+      ultimoPagamento: Date | null;
       totalCompras: number;
 
       totalVendas: number;
@@ -621,6 +597,7 @@ export class ClientesService {
       this.prisma.compra.findMany({
         where: {
           clienteId,
+          status: { not: 'CANCELADA' },
         },
 
         orderBy: {
@@ -635,6 +612,7 @@ export class ClientesService {
       this.prisma.venda.findMany({
         where: {
           clienteId,
+          status: { not: 'CANCELADA' },
         },
 
         orderBy: {
@@ -652,6 +630,7 @@ export class ClientesService {
         },
 
         include: {
+          pagamentos: { orderBy: [{ pagoEm: 'desc' }, { id: 'desc' }] },
           ////////////////////////////////////////////////////
           // CLIENTE
           ////////////////////////////////////////////////////
@@ -681,67 +660,24 @@ export class ClientesService {
     // FINANCEIRO
     //////////////////////////////////////////////////////////
 
-    let totalCompras = 0;
-
-    let totalVendas = 0;
-
-    let totalPago = 0;
-
-    let totalPendente = 0;
-
-    let totalParcial = 0;
-
-    //////////////////////////////////////////////////////////
-    // TRANSAÇÕES
-    //////////////////////////////////////////////////////////
-
-    for (const transacao of transacoes) {
-      ////////////////////////////////////////////////////////
-      // VALORES
-      ////////////////////////////////////////////////////////
-
-      const valor = Number(transacao.valor ?? 0);
-
-      const valorPago = Number(transacao.valorPago ?? 0);
-
-      const valorRestante = Number(transacao.valorRestante ?? 0);
-
-      ////////////////////////////////////////////////////////
-      // SAÍDA
-      ////////////////////////////////////////////////////////
-
-      if (transacao.tipo === 'SAIDA') {
-        totalCompras += valor;
-      }
-
-      ////////////////////////////////////////////////////////
-      // ENTRADA
-      ////////////////////////////////////////////////////////
-
-      if (transacao.tipo === 'ENTRADA') {
-        totalVendas += valor;
-      }
-
-      ////////////////////////////////////////////////////////
-      // TOTAL PAGO
-      ////////////////////////////////////////////////////////
-
-      totalPago += valorPago;
-
-      ////////////////////////////////////////////////////////
-      // TOTAL PENDENTE
-      ////////////////////////////////////////////////////////
-
-      totalPendente += valorRestante;
-
-      ////////////////////////////////////////////////////////
-      // PARCIAL
-      ////////////////////////////////////////////////////////
-
-      if (valorPago > 0 && valorRestante > 0) {
-        totalParcial += valorRestante;
-      }
-    }
+    const financial = summarizeTitles(transacoes, TipoTransacao.ENTRADA);
+    const totalCompras = compras
+      .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+      .toNumber();
+    const totalVendas = vendas
+      .reduce((sum, item) => sum.add(item.valorTotal), new Prisma.Decimal(0))
+      .toNumber();
+    const totalPago = financial.realizado;
+    const totalPendente = financial.aberto;
+    const totalParcial = financial.parcial;
+    const extra = {
+      totalRecebido: financial.realizado,
+      totalAReceber: financial.aberto,
+      totalVencido: financial.vencido,
+      quantidadeOperacoes: vendas.length,
+      ultimaVenda: vendas[0]?.dataVenda ?? null,
+      ultimoPagamento: financial.ultimoPagamento,
+    };
 
     //////////////////////////////////////////////////////////
     // KG COMPRADO
@@ -756,7 +692,7 @@ export class ClientesService {
     //////////////////////////////////////////////////////////
 
     const totalKgVendido = vendas.reduce((acc, venda) => {
-      return acc + Number(venda.pesoBruto ?? 0);
+      return acc + Number(venda.pesoLiquido ?? 0);
     }, 0);
 
     //////////////////////////////////////////////////////////
@@ -771,7 +707,8 @@ export class ClientesService {
 
         totalVendas,
 
-        saldo: totalVendas - totalCompras,
+        saldo: totalPendente,
+        ...extra,
 
         totalPago,
 
@@ -798,286 +735,58 @@ export class ClientesService {
   // RESUMO LISTA
   ////////////////////////////////////////////////////////////
 
-  async resumoLista(): Promise<
-    {
-      id: string;
-
-      nome: string;
-
-      proprietarioNome: string;
-
-      nomeFantasia: string;
-
-      telefone: string;
-
-      totalCompras: number;
-
-      totalVendas: number;
-
-      saldo: number;
-
-      totalPago: number;
-
-      totalPendente: number;
-
-      totalParcial: number;
-
-      totalKgComprado: number;
-
-      totalKgVendido: number;
-    }[]
-  > {
-    //////////////////////////////////////////////////////////
-    // CLIENTES
-    //////////////////////////////////////////////////////////
-
+  async resumoLista() {
     const clientes = await this.prisma.cliente.findMany({
-      select: {
-        id: true,
-
-        nome: true,
-
-        telefone: true,
-
-        proprietarioNome: true,
-
-        nomeFantasia: true,
+      include: {
+        vendas: {
+          where: { status: { not: 'CANCELADA' } },
+          orderBy: [{ dataVenda: 'desc' }, { id: 'desc' }],
+        },
+        compras: { where: { status: { not: 'CANCELADA' } } },
+        transacoes: { include: { pagamentos: true } },
       },
     });
-
-    //////////////////////////////////////////////////////////
-    // TRANSAÇÕES
-    //////////////////////////////////////////////////////////
-
-    const transacoes = await this.prisma.transacao.findMany({
-      select: {
-        clienteId: true,
-
-        tipo: true,
-
-        valor: true,
-
-        valorPago: true,
-
-        valorRestante: true,
-      },
-    });
-
-    //////////////////////////////////////////////////////////
-    // COMPRAS
-    //////////////////////////////////////////////////////////
-
-    const compras = await this.prisma.compra.groupBy({
-      by: ['clienteId'],
-
-      _sum: {
-        kgBruto: true,
-      },
-    });
-
-    //////////////////////////////////////////////////////////
-    // VENDAS
-    //////////////////////////////////////////////////////////
-
-    const vendas = await this.prisma.venda.groupBy({
-      by: ['clienteId'],
-
-      _sum: {
-        pesoLiquido: true,
-      },
-    });
-
-    //////////////////////////////////////////////////////////
-    // MAPA FINANCEIRO
-    //////////////////////////////////////////////////////////
-
-    const mapaFinanceiro = new Map<
-      string,
-      {
-        entradas: number;
-
-        saidas: number;
-
-        pago: number;
-
-        pendente: number;
-
-        parcial: number;
-      }
-    >();
-
-    //////////////////////////////////////////////////////////
-    // MAPA COMPRAS
-    //////////////////////////////////////////////////////////
-
-    const mapaCompras = new Map<string, number>();
-
-    //////////////////////////////////////////////////////////
-    // MAPA VENDAS
-    //////////////////////////////////////////////////////////
-
-    const mapaVendas = new Map<string, number>();
-
-    //////////////////////////////////////////////////////////
-    // TRANSAÇÕES
-    //////////////////////////////////////////////////////////
-
-    for (const transacao of transacoes) {
-      if (!transacao.clienteId) {
-        continue;
-      }
-
-      ////////////////////////////////////////////////////////
-      // MAPA
-      ////////////////////////////////////////////////////////
-
-      const atual = mapaFinanceiro.get(transacao.clienteId) || {
-        entradas: 0,
-
-        saidas: 0,
-
-        pago: 0,
-
-        pendente: 0,
-
-        parcial: 0,
-      };
-
-      ////////////////////////////////////////////////////////
-      // VALORES
-      ////////////////////////////////////////////////////////
-
-      const valor = Number(transacao.valor ?? 0);
-
-      const valorPago = Number(transacao.valorPago ?? 0);
-
-      const valorRestante = Number(transacao.valorRestante ?? 0);
-
-      ////////////////////////////////////////////////////////
-      // ENTRADAS
-      ////////////////////////////////////////////////////////
-
-      if (transacao.tipo === 'ENTRADA') {
-        atual.entradas += valor;
-      }
-
-      ////////////////////////////////////////////////////////
-      // SAÍDAS
-      ////////////////////////////////////////////////////////
-
-      if (transacao.tipo === 'SAIDA') {
-        atual.saidas += valor;
-      }
-
-      ////////////////////////////////////////////////////////
-      // PAGO
-      ////////////////////////////////////////////////////////
-
-      atual.pago += valorPago;
-
-      ////////////////////////////////////////////////////////
-      // PENDENTE
-      ////////////////////////////////////////////////////////
-
-      atual.pendente += valorRestante;
-
-      ////////////////////////////////////////////////////////
-      // PARCIAL
-      ////////////////////////////////////////////////////////
-
-      if (valorPago > 0 && valorRestante > 0) {
-        atual.parcial += valorRestante;
-      }
-
-      ////////////////////////////////////////////////////////
-      // SET MAPA
-      ////////////////////////////////////////////////////////
-
-      mapaFinanceiro.set(transacao.clienteId, atual);
-    }
-
-    //////////////////////////////////////////////////////////
-    // COMPRAS
-    //////////////////////////////////////////////////////////
-
-    for (const compra of compras) {
-      if (compra.clienteId) {
-        mapaCompras.set(compra.clienteId, Number(compra._sum.kgBruto ?? 0));
-      }
-    }
-
-    //////////////////////////////////////////////////////////
-    // VENDAS
-    //////////////////////////////////////////////////////////
-
-    for (const venda of vendas) {
-      if (venda.clienteId) {
-        mapaVendas.set(
-          venda.clienteId,
-          Number(venda._sum.pesoLiquido ?? 0),
-        );
-      }
-    }
-
-    //////////////////////////////////////////////////////////
-    // RESPONSE
-    //////////////////////////////////////////////////////////
-
     return clientes.map((cliente) => {
-      ////////////////////////////////////////////////////////
-      // FINANCEIRO
-      ////////////////////////////////////////////////////////
-
-      const financeiro = mapaFinanceiro.get(cliente.id) || {
-        entradas: 0,
-
-        saidas: 0,
-
-        pago: 0,
-
-        pendente: 0,
-
-        parcial: 0,
-      };
-
-      ////////////////////////////////////////////////////////
-      // RESPONSE
-      ////////////////////////////////////////////////////////
-
+      const financial = summarizeTitles(
+        cliente.transacoes,
+        TipoTransacao.ENTRADA,
+      );
       return {
         id: cliente.id,
-
         nome: cliente.nome,
-
         telefone: cliente.telefone ?? '',
-
         proprietarioNome: cliente.proprietarioNome ?? '',
-
         nomeFantasia: cliente.nomeFantasia ?? '',
-
-        //////////////////////////////////////////////////////
-        // FINANCEIRO
-        //////////////////////////////////////////////////////
-
-        totalCompras: financeiro.saidas,
-
-        totalVendas: financeiro.entradas,
-
-        saldo: financeiro.entradas - financeiro.saidas,
-
-        totalPago: financeiro.pago,
-
-        totalPendente: financeiro.pendente,
-
-        totalParcial: financeiro.parcial,
-
-        //////////////////////////////////////////////////////
-        // ESTOQUE
-        //////////////////////////////////////////////////////
-
-        totalKgComprado: mapaCompras.get(cliente.id) ?? 0,
-
-        totalKgVendido: mapaVendas.get(cliente.id) ?? 0,
+        totalCompras: cliente.compras
+          .reduce(
+            (sum, item) => sum.add(item.valorTotal),
+            new Prisma.Decimal(0),
+          )
+          .toNumber(),
+        totalVendas: cliente.vendas
+          .reduce(
+            (sum, item) => sum.add(item.valorTotal),
+            new Prisma.Decimal(0),
+          )
+          .toNumber(),
+        saldo: financial.aberto,
+        totalPago: financial.realizado,
+        totalPendente: financial.aberto,
+        totalParcial: financial.parcial,
+        totalRecebido: financial.realizado,
+        totalAReceber: financial.aberto,
+        totalVencido: financial.vencido,
+        totalKgComprado: cliente.compras.reduce(
+          (sum, item) => sum + item.kgBruto,
+          0,
+        ),
+        totalKgVendido: cliente.vendas.reduce(
+          (sum, item) => sum + item.pesoLiquido,
+          0,
+        ),
+        quantidadeOperacoes: cliente.vendas.length,
+        ultimaVenda: cliente.vendas[0]?.dataVenda ?? null,
+        ultimoPagamento: financial.ultimoPagamento,
       };
     });
   }

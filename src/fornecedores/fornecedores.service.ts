@@ -3,9 +3,15 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   FazendaFornecedor,
   Fornecedor,
+  Prisma,
+  TipoTransacao,
   TipoAlertaFornecedor,
 } from '@prisma/client';
 
+import {
+  summarizeTitles,
+  financialProjection,
+} from '../financeiro/financial-state';
 import { PrismaService } from '../prisma/prisma.service';
 
 import PdfPrinter from 'pdfmake';
@@ -270,8 +276,6 @@ export class FornecedoresService {
       throw new NotFoundException('Fornecedor não encontrado');
     }
 
-    await this.verificarAlertasFornecedor(fornecedorId);
-
     const alertasAtualizados = await this.prisma.alertaFornecedor.findMany({
       where: {
         fornecedorId,
@@ -281,6 +285,7 @@ export class FornecedoresService {
     const compras = await this.prisma.compra.findMany({
       where: {
         fornecedorId,
+        status: { not: 'CANCELADA' },
       },
 
       orderBy: {
@@ -302,10 +307,15 @@ export class FornecedoresService {
 
     const ultimaCompra = compras.length > 0 ? compras[0] : null;
 
+    const history = await this.historicoCompleto(fornecedorId);
     return {
       fornecedor,
 
       resumo: {
+        totalPago: history.resumo.totalPago,
+        totalAPagar: history.resumo.totalAPagar,
+        totalVencido: history.resumo.totalVencido,
+        ultimoPagamento: history.resumo.ultimoPagamento,
         totalCompras: compras.length,
 
         totalComprado,
@@ -350,8 +360,6 @@ export class FornecedoresService {
       throw new NotFoundException('Fornecedor não encontrado');
     }
 
-    await this.verificarAlertasFornecedor(fornecedorId);
-
     const alertasAtualizados = await this.prisma.alertaFornecedor.findMany({
       where: {
         fornecedorId,
@@ -361,6 +369,7 @@ export class FornecedoresService {
     const compras = await this.prisma.compra.findMany({
       where: {
         fornecedorId,
+        status: { not: 'CANCELADA' },
       },
 
       include: {
@@ -368,7 +377,7 @@ export class FornecedoresService {
       },
 
       orderBy: {
-        dataCompra: 'asc',
+        dataCompra: 'desc',
       },
     });
 
@@ -384,7 +393,7 @@ export class FornecedoresService {
 
         pagamentos: {
           orderBy: {
-            createdAt: 'desc',
+            pagoEm: 'desc',
           },
         },
 
@@ -413,16 +422,9 @@ export class FornecedoresService {
     // TOTAL PAGO
     ////////////////////////////////////////////////////////////
 
-    const totalPago = transacoes.reduce(
-      (acc, transacao) => acc + Number(transacao.valorPago ?? 0),
-      0,
-    );
-
-    ////////////////////////////////////////////////////////////
-    // SALDO DEVEDOR
-    ////////////////////////////////////////////////////////////
-
-    const saldoDevedor = totalComprado - totalPago;
+    const financial = summarizeTitles(transacoes, TipoTransacao.SAIDA);
+    const totalPago = financial.realizado;
+    const saldoDevedor = financial.aberto;
 
     ////////////////////////////////////////////////////////////
     // LIMITE FINANCEIRO
@@ -441,7 +443,13 @@ export class FornecedoresService {
     // PAGAMENTOS
     ////////////////////////////////////////////////////////////
 
-    const pagamentos = transacoes.flatMap((transacao) => transacao.pagamentos);
+    const pagamentos = transacoes
+      .filter((title) => title.tipo === TipoTransacao.SAIDA)
+      .flatMap((title) => title.pagamentos)
+      .sort(
+        (a, b) =>
+          b.pagoEm.getTime() - a.pagoEm.getTime() || b.id.localeCompare(a.id),
+      );
 
     ////////////////////////////////////////////////////////////
     // HISTÓRICO OPERACIONAL CONSOLIDADO
@@ -452,26 +460,51 @@ export class FornecedoresService {
       // TRANSAÇÃO VINCULADA
       //////////////////////////////////////////////////////////
 
-      const transacao = transacoes.find((item) => item.compraId === compra.id);
+      const titles = transacoes.filter(
+        (item) =>
+          item.compraId === compra.id && item.tipo === TipoTransacao.SAIDA,
+      );
+      const aggregate = summarizeTitles(titles, TipoTransacao.SAIDA);
+      const nominal = titles
+        .filter((item) => item.statusFinanceiro !== 'CANCELADO')
+        .reduce((sum, item) => sum.add(item.valor), new Prisma.Decimal(0));
+      const activePaid = titles
+        .filter((item) => item.statusFinanceiro !== 'CANCELADO')
+        .reduce(
+          (sum, item) => sum.add(item.valorPago ?? 0),
+          new Prisma.Decimal(0),
+        );
+      const projectedStatus =
+        titles.length &&
+        titles.every((item) => item.statusFinanceiro === 'CANCELADO')
+          ? 'CANCELADO'
+          : financialProjection(nominal, activePaid).statusFinanceiro;
 
       //////////////////////////////////////////////////////////
       // PAGAMENTOS
       //////////////////////////////////////////////////////////
 
       const pagamentos =
-        transacao?.pagamentos.map((pagamento) => ({
-          id: pagamento.id,
+        titles
+          .flatMap((title) => title.pagamentos)
+          .sort(
+            (a, b) =>
+              b.pagoEm.getTime() - a.pagoEm.getTime() ||
+              b.id.localeCompare(a.id),
+          )
+          .map((pagamento) => ({
+            id: pagamento.id,
 
-          valor: Number(pagamento.valor ?? 0),
+            valor: Number(pagamento.valor ?? 0),
 
-          formaPagamento: pagamento.formaPagamento,
+            formaPagamento: pagamento.formaPagamento,
 
-          pagoEm: pagamento.pagoEm,
+            pagoEm: pagamento.pagoEm,
 
-          createdAt: pagamento.createdAt,
+            createdAt: pagamento.createdAt,
 
-          observacoes: pagamento.observacoes ?? null,
-        })) ?? [];
+            observacoes: pagamento.observacoes ?? null,
+          })) ?? [];
 
       //////////////////////////////////////////////////////////
       // RETURN
@@ -534,13 +567,11 @@ export class FornecedoresService {
         // STATUS FINANCEIRO
         ////////////////////////////////////////////////////////
 
-        statusFinanceiro: transacao?.statusFinanceiro ?? 'PENDENTE',
+        statusFinanceiro: projectedStatus,
 
-        valorPago: Number(transacao?.valorPago ?? 0),
+        valorPago: aggregate.realizado,
 
-        valorRestante: Number(
-          transacao?.valorRestante ?? compra.valorTotal ?? 0,
-        ),
+        valorRestante: aggregate.aberto,
 
         ////////////////////////////////////////////////////////
         // PAGAMENTOS
@@ -579,6 +610,8 @@ export class FornecedoresService {
         totalPago,
 
         saldoDevedor,
+        totalAPagar: saldoDevedor,
+        totalVencido: financial.vencido,
 
         limiteFinanceiro,
 

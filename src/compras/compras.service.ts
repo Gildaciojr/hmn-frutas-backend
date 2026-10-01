@@ -13,6 +13,10 @@ import {
   TipoDescontoCompra,
 } from '@prisma/client';
 
+import {
+  assertFinancialConsistency,
+  serializableTransaction,
+} from '../financeiro/financial-state';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateCompraDto } from './dto/create-compra.dto';
@@ -421,7 +425,7 @@ export class ComprasService {
   }
 
   async update(id: string, data: UpdateCompraDto): Promise<Compra> {
-    return this.prisma.$transaction(async (tx): Promise<Compra> => {
+    return serializableTransaction(this.prisma, async (tx): Promise<Compra> => {
       const compra = await tx.compra.findUnique({
         where: {
           id,
@@ -459,6 +463,14 @@ export class ComprasService {
           'Somente compras fechadas podem ser editadas',
         );
       }
+
+      assertFinancialConsistency(
+        transacao,
+        transacao.pagamentos.reduce(
+          (sum, payment) => sum.add(payment.valor),
+          new Prisma.Decimal(0),
+        ),
+      );
 
       if (
         Number(transacao.valorPago ?? 0) > 0 ||

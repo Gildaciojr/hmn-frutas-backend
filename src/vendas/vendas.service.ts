@@ -8,11 +8,19 @@ import {
 import {
   Prisma,
   StatusPagamento,
+  StatusFinanceiro,
   StatusVenda,
   TipoTransacao,
   Venda,
 } from '@prisma/client';
 
+import {
+  assertFinancialConsistency,
+  financialProjection,
+  isOverdue,
+  paymentStatus,
+  serializableTransaction,
+} from '../financeiro/financial-state';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateVendaDto } from './dto/create-venda.dto';
@@ -38,6 +46,14 @@ export class VendasService {
       nome: string;
     },
   ): Promise<Venda> {
+    if (
+      data.statusPagamento !== undefined &&
+      data.statusPagamento !== StatusPagamento.PENDENTE
+    ) {
+      throw new ConflictException(
+        'Registre o recebimento pelo fluxo financeiro de pagamento',
+      );
+    }
     return this.prisma.$transaction(async (tx) => {
       ////////////////////////////////////////////////////////
       // CLIENTE
@@ -445,7 +461,7 @@ export class VendasService {
             // STATUS PAGAMENTO
             ////////////////////////////////////////////////////
 
-            statusPagamento: data.statusPagamento ?? StatusPagamento.PENDENTE,
+            statusPagamento: StatusPagamento.PENDENTE,
 
             ////////////////////////////////////////////////////
             // STATUS OPERACIONAL
@@ -536,13 +552,15 @@ export class VendasService {
     Prisma.VendaGetPayload<{
       include: {
         cliente: true;
+        transacoes: true;
       };
     }>[]
   > {
-    return this.prisma.venda.findMany({
+    const vendas = await this.prisma.venda.findMany({
       include: {
         cliente: true,
         compraOrigem: true,
+        transacoes: true,
       },
 
       orderBy: {
@@ -551,6 +569,16 @@ export class VendasService {
 
       take: 200,
     });
+    return vendas.map((venda) => ({
+      ...venda,
+      transacoes: venda.transacoes.map((title) => ({
+        ...title,
+        vencido:
+          title.statusFinanceiro !== StatusFinanceiro.CANCELADO &&
+          new Prisma.Decimal(title.valorRestante ?? 0).gt(0) &&
+          isOverdue(title.vencimento),
+      })),
+    }));
   }
 
   ////////////////////////////////////////////////////////////
@@ -972,7 +1000,14 @@ export class VendasService {
   ////////////////////////////////////////////////////////////
 
   async update(id: string, data: UpdateVendaDto): Promise<Venda> {
-    return this.prisma.$transaction(async (tx): Promise<Venda> => {
+    if (
+      data.statusPagamento !== undefined &&
+      data.statusPagamento !== StatusPagamento.PENDENTE
+    )
+      throw new ConflictException(
+        'Registre o recebimento pelo fluxo financeiro de pagamento',
+      );
+    return serializableTransaction(this.prisma, async (tx): Promise<Venda> => {
       const venda = await tx.venda.findUnique({
         where: {
           id,
@@ -1011,6 +1046,13 @@ export class VendasService {
         );
       }
 
+      assertFinancialConsistency(
+        transacao,
+        transacao.pagamentos.reduce(
+          (sum, payment) => sum.add(payment.valor),
+          new Prisma.Decimal(0),
+        ),
+      );
       if (
         Number(transacao.valorPago ?? 0) > 0 ||
         transacao.pagamentos.length > 0
@@ -1301,7 +1343,7 @@ export class VendasService {
 
             valorTotal,
 
-            statusPagamento: data.statusPagamento ?? venda.statusPagamento,
+            statusPagamento: StatusPagamento.PENDENTE,
 
             observacoes: data.observacoes ?? venda.observacoes,
           },
@@ -1344,65 +1386,82 @@ export class VendasService {
     id: string,
     statusPagamento: StatusPagamento,
   ): Promise<Venda> {
-    const venda = await this.prisma.venda.findUnique({
-      where: {
-        id,
-      },
-    });
-
-    if (!venda) {
-      throw new NotFoundException('Venda não encontrada');
-    }
-
-    if (!venda.clienteId && statusPagamento !== StatusPagamento.PENDENTE) {
-      throw new BadRequestException(
-        'Vincule um cliente à venda antes de registrar pagamento',
+    return serializableTransaction(this.prisma, async (tx) => {
+      const venda = await tx.venda.findUnique({
+        where: { id },
+        include: { transacoes: { include: { pagamentos: true } } },
+      });
+      if (!venda) throw new NotFoundException('Venda não encontrada');
+      const titles = venda.transacoes.filter(
+        (title) =>
+          title.tipo === TipoTransacao.ENTRADA &&
+          title.statusFinanceiro !== StatusFinanceiro.CANCELADO,
       );
-    }
-
-    return this.prisma.venda.update({
-      where: {
-        id,
-      },
-
-      data: {
-        statusPagamento,
-      },
+      for (const title of titles)
+        assertFinancialConsistency(
+          title,
+          title.pagamentos.reduce(
+            (sum, event) => sum.add(event.valor),
+            new Prisma.Decimal(0),
+          ),
+        );
+      const total = titles.reduce(
+        (sum, title) => sum.add(title.valor),
+        new Prisma.Decimal(0),
+      );
+      const paid = titles.reduce(
+        (sum, title) => sum.add(title.valorPago ?? 0),
+        new Prisma.Decimal(0),
+      );
+      const derived = paymentStatus(
+        financialProjection(total, paid).statusFinanceiro,
+      );
+      if (statusPagamento !== derived || venda.statusPagamento !== derived)
+        throw new ConflictException(
+          'Status derivado do financeiro. Registre a baixa pelo fluxo de pagamento.',
+        );
+      return venda;
     });
   }
 
-  ////////////////////////////////////////////////////////////
-  // STATUS OPERACIONAL
-  ////////////////////////////////////////////////////////////
-
   async atualizarStatus(id: string, status: StatusVenda): Promise<Venda> {
-    const venda = await this.prisma.venda.findUnique({
-      where: {
-        id,
-      },
-    });
-
-    if (!venda) {
-      throw new NotFoundException('Venda não encontrada');
-    }
-
-    if (
-      !venda.clienteId &&
-      (status === StatusVenda.FATURADA || status === StatusVenda.ENTREGUE)
-    ) {
-      throw new BadRequestException(
-        'Vincule um cliente à venda antes de faturar ou entregar',
+    if (status === StatusVenda.CANCELADA)
+      throw new ConflictException(
+        'Use o fluxo oficial de cancelamento da venda',
       );
-    }
+    return serializableTransaction(this.prisma, async (tx) => {
+      const venda = await tx.venda.findUnique({
+        where: {
+          id,
+        },
+      });
 
-    return this.prisma.venda.update({
-      where: {
-        id,
-      },
+      if (!venda) {
+        throw new NotFoundException('Venda não encontrada');
+      }
 
-      data: {
-        status,
-      },
+      if (venda.status === StatusVenda.CANCELADA) {
+        throw new ConflictException('Venda cancelada não pode mudar de status');
+      }
+
+      if (
+        !venda.clienteId &&
+        (status === StatusVenda.FATURADA || status === StatusVenda.ENTREGUE)
+      ) {
+        throw new BadRequestException(
+          'Vincule um cliente à venda antes de faturar ou entregar',
+        );
+      }
+
+      return tx.venda.update({
+        where: {
+          id,
+        },
+
+        data: {
+          status,
+        },
+      });
     });
   }
 
@@ -1411,7 +1470,7 @@ export class VendasService {
   ////////////////////////////////////////////////////////////
 
   async cancelarVenda(id: string, motivo?: string): Promise<Venda> {
-    return this.prisma.$transaction(async (tx) => {
+    return serializableTransaction(this.prisma, async (tx) => {
       const venda = await tx.venda.findUnique({
         where: {
           id,
@@ -1426,6 +1485,25 @@ export class VendasService {
         throw new BadRequestException('Venda já cancelada');
       }
 
+      const titles = await tx.transacao.findMany({
+        where: { vendaId: id },
+        include: { pagamentos: true },
+      });
+      if (
+        titles.some(
+          (title) =>
+            title.pagamentos.length > 0 ||
+            new Prisma.Decimal(title.valorPago ?? 0).gt(0),
+        )
+      ) {
+        throw new ConflictException(
+          'Venda possui recebimento e exige processo de estorno/reembolso',
+        );
+      }
+      for (const title of titles) {
+        if (title.statusFinanceiro !== StatusFinanceiro.CANCELADO)
+          assertFinancialConsistency(title, new Prisma.Decimal(0));
+      }
       const vendaCancelada = await tx.venda.update({
         where: {
           id,
@@ -1447,6 +1525,9 @@ export class VendasService {
 
         data: {
           descricao: `CANCELADA - ${venda.numeroPedido}`,
+          statusFinanceiro: StatusFinanceiro.CANCELADO,
+          valorPago: new Prisma.Decimal(0),
+          valorRestante: new Prisma.Decimal(0),
         },
       });
 

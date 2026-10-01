@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  Matches,
   Min,
 } from 'class-validator';
 
@@ -32,6 +33,9 @@ export class RegistrarPagamentoDto {
 
   @IsOptional()
   @IsDateString()
+  @Matches(/T.*(?:Z|[+-]\d{2}:\d{2})$/, {
+    message: 'pagoEm deve conter data, hora e timezone',
+  })
   pagoEm?: string;
 
   //////////////////////////////////////////////////

@@ -493,7 +493,7 @@ export function buildFornecedorRelatorioTemplate(
 
             {
               stack: [
-                cardTitle('SALDO'),
+                cardTitle('A PAGAR'),
 
                 {
                   text: money(data.resumo.saldoDevedor),

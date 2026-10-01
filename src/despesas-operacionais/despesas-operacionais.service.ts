@@ -17,6 +17,8 @@ export class DespesasOperacionaisService {
   ////////////////////////////////////////////////////////////
 
   async create(data: CreateDespesaOperacionalDto) {
+    const valor = new Prisma.Decimal(data.valor);
+    const pagoEm = new Date(data.pagoEm);
     return this.prisma.$transaction(async (tx) => {
       //////////////////////////////////////////////////////////
       // TRANSAÇÃO FINANCEIRA
@@ -26,9 +28,9 @@ export class DespesasOperacionaisService {
         data: {
           tipo: TipoTransacao.SAIDA,
 
-          valor: new Prisma.Decimal(data.valor),
+          valor: valor,
 
-          valorPago: new Prisma.Decimal(data.valor),
+          valorPago: valor,
 
           valorRestante: new Prisma.Decimal(0),
 
@@ -38,9 +40,22 @@ export class DespesasOperacionaisService {
 
           observacoes: data.observacoes,
 
-          pagoEm: new Date(data.data),
+          pagoEm,
+
+          formaPagamento: data.formaPagamento,
 
           vencimento: new Date(data.data),
+        },
+      });
+
+      await tx.pagamentoTransacao.create({
+        data: {
+          transacaoId: transacao.id,
+          valor,
+          valorRestanteApos: new Prisma.Decimal(0),
+          formaPagamento: data.formaPagamento,
+          pagoEm,
+          observacoes: data.observacoes,
         },
       });
 
@@ -54,7 +69,7 @@ export class DespesasOperacionaisService {
 
           atividade: data.atividade,
 
-          valor: new Prisma.Decimal(data.valor),
+          valor: valor,
 
           observacoes: data.observacoes,
 
