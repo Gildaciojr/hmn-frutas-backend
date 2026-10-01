@@ -1,4 +1,4 @@
-import { IsDateString, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsDateString, IsIn, IsOptional, IsUUID } from 'class-validator';
 
 export class RelatorioProducaoDto {
   ////////////////////////////////////////////////////////////
@@ -24,6 +24,6 @@ export class RelatorioProducaoDto {
   ////////////////////////////////////////////////////////////
 
   @IsOptional()
-  @IsString()
+  @IsIn(['COMPRAS', 'VENDAS', 'AMBOS'])
   tipo?: 'COMPRAS' | 'VENDAS' | 'AMBOS';
 }

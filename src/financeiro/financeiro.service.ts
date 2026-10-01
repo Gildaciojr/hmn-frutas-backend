@@ -21,6 +21,17 @@ import { Response } from 'express';
 import { RelatorioProducaoDto } from './dto/relatorio-producao.dto';
 
 import { gerarRelatorioProducaoPdf } from './templates/producao-relatorio.template';
+import {
+  getOperationalDateRange,
+  parseOperationalDate,
+} from '../common/utils/report-period';
+
+type ProducaoCompra = Prisma.CompraGetPayload<{
+  include: { fornecedor: { select: { nome: true } } };
+}>;
+type ProducaoVenda = Prisma.VendaGetPayload<{
+  include: { cliente: { select: { nome: true } } };
+}>;
 
 @Injectable()
 export class FinanceiroService {
@@ -279,18 +290,20 @@ export class FinanceiroService {
   // DADOS RELATÓRIO PRODUÇÃO
   ////////////////////////////////////////////////////////////
 
-  private async obterDadosRelatorioProducao(filtros: RelatorioProducaoDto) {
-    const dataInicio = new Date(filtros.dataInicial);
-
-    const dataFim = new Date(filtros.dataFinal);
-
-    dataFim.setHours(23, 59, 59, 999);
+  async obterDadosRelatorioProducao(
+    filtros: RelatorioProducaoDto,
+    emissor?: string,
+  ) {
+    const range = getOperationalDateRange(
+      filtros.dataInicial,
+      filtros.dataFinal,
+    );
+    const dataInicio = parseOperationalDate(filtros.dataInicial);
+    const dataFim = parseOperationalDate(filtros.dataFinal);
+    const tipo = filtros.tipo ?? 'AMBOS';
 
     const compraWhere: Prisma.CompraWhereInput = {
-      dataCompra: {
-        gte: dataInicio,
-        lte: dataFim,
-      },
+      dataCompra: range,
 
       status: {
         not: StatusCompra.CANCELADA,
@@ -298,15 +311,15 @@ export class FinanceiroService {
     };
 
     const vendaWhere: Prisma.VendaWhereInput = {
-      dataVenda: {
-        gte: dataInicio,
-        lte: dataFim,
-      },
+      dataVenda: range,
 
       status: {
         not: StatusVenda.CANCELADA,
       },
     };
+
+    const compraOptionsWhere = { ...compraWhere };
+    const vendaOptionsWhere = { ...vendaWhere };
 
     if (filtros.usuarioId) {
       compraWhere.usuarioResponsavelId = filtros.usuarioId;
@@ -314,23 +327,48 @@ export class FinanceiroService {
       vendaWhere.usuarioResponsavelId = filtros.usuarioId;
     }
 
-    const [compras, vendas] = await Promise.all([
-      this.prisma.compra.findMany({
-        where: compraWhere,
+    const [compras, vendas, usuariosCompras, usuariosVendas] =
+      await Promise.all([
+        tipo === 'VENDAS'
+          ? Promise.resolve<ProducaoCompra[]>([])
+          : this.prisma.compra.findMany({
+              where: compraWhere,
+              include: { fornecedor: { select: { nome: true } } },
+              orderBy: [{ dataCompra: 'desc' }, { id: 'desc' }],
+            }),
+        tipo === 'COMPRAS'
+          ? Promise.resolve<ProducaoVenda[]>([])
+          : this.prisma.venda.findMany({
+              where: vendaWhere,
+              include: { cliente: { select: { nome: true } } },
+              orderBy: [{ dataVenda: 'desc' }, { id: 'desc' }],
+            }),
+        tipo === 'VENDAS'
+          ? Promise.resolve([])
+          : this.prisma.compra.groupBy({
+              by: ['usuarioResponsavelId', 'usuarioResponsavelNome'],
+              where: compraOptionsWhere,
+            }),
+        tipo === 'COMPRAS'
+          ? Promise.resolve([])
+          : this.prisma.venda.groupBy({
+              by: ['usuarioResponsavelId', 'usuarioResponsavelNome'],
+              where: vendaOptionsWhere,
+            }),
+      ]);
 
-        orderBy: {
-          createdAt: 'asc',
-        },
-      }),
-
-      this.prisma.venda.findMany({
-        where: vendaWhere,
-
-        orderBy: {
-          createdAt: 'asc',
-        },
-      }),
-    ]);
+    const availableUsers = new Map<string, { id: string; nome: string }>();
+    for (const item of [...usuariosCompras, ...usuariosVendas]) {
+      if (item.usuarioResponsavelId) {
+        availableUsers.set(item.usuarioResponsavelId, {
+          id: item.usuarioResponsavelId,
+          nome: item.usuarioResponsavelNome ?? 'Não identificado',
+        });
+      }
+    }
+    const usuariosDisponiveis = [...availableUsers.values()].sort((a, b) =>
+      a.nome.localeCompare(b.nome, 'pt-BR'),
+    );
 
     const usuarios = new Map<
       string,
@@ -383,9 +421,13 @@ export class FinanceiroService {
 
       item.quantidadeCompras += 1;
 
-      item.kgComprado += Number(compra.kgLiquido ?? 0);
+      item.kgComprado = new Prisma.Decimal(item.kgComprado)
+        .add(compra.kgLiquido)
+        .toNumber();
 
-      item.valorComprado += Number(compra.valorTotal ?? 0);
+      item.valorComprado = new Prisma.Decimal(item.valorComprado)
+        .add(compra.valorTotal)
+        .toNumber();
     }
 
     for (const venda of vendas) {
@@ -418,9 +460,13 @@ export class FinanceiroService {
 
       item.quantidadeVendas += 1;
 
-      item.kgVendido += Number(venda.pesoLiquido ?? 0);
+      item.kgVendido = new Prisma.Decimal(item.kgVendido)
+        .add(venda.pesoLiquido)
+        .toNumber();
 
-      item.valorVendido += Number(venda.valorTotal ?? 0);
+      item.valorVendido = new Prisma.Decimal(item.valorVendido)
+        .add(venda.valorTotal)
+        .toNumber();
     }
 
     const producaoPorUsuario = Array.from(usuarios.values()).sort(
@@ -437,32 +483,42 @@ export class FinanceiroService {
         dataFim,
       },
 
-      filtros,
+      filtros: { ...filtros, tipo },
+      usuariosDisponiveis,
+      usuarioSelecionado: filtros.usuarioId
+        ? (availableUsers.get(filtros.usuarioId)?.nome ?? filtros.usuarioId)
+        : 'Todos',
+      emissor,
 
       totais: {
         compras: compras.length,
 
         vendas: vendas.length,
 
-        valorComprado: compras.reduce(
-          (acc, item) => acc + Number(item.valorTotal ?? 0),
-          0,
-        ),
+        valorComprado: compras
+          .reduce(
+            (acc, item) => acc.add(item.valorTotal),
+            new Prisma.Decimal(0),
+          )
+          .toNumber(),
 
-        valorVendido: vendas.reduce(
-          (acc, item) => acc + Number(item.valorTotal ?? 0),
-          0,
-        ),
+        valorVendido: vendas
+          .reduce(
+            (acc, item) => acc.add(item.valorTotal),
+            new Prisma.Decimal(0),
+          )
+          .toNumber(),
 
-        kgComprado: compras.reduce(
-          (acc, item) => acc + Number(item.kgLiquido ?? 0),
-          0,
-        ),
+        kgComprado: compras
+          .reduce((acc, item) => acc.add(item.kgLiquido), new Prisma.Decimal(0))
+          .toNumber(),
 
-        kgVendido: vendas.reduce(
-          (acc, item) => acc + Number(item.pesoLiquido ?? 0),
-          0,
-        ),
+        kgVendido: vendas
+          .reduce(
+            (acc, item) => acc.add(item.pesoLiquido),
+            new Prisma.Decimal(0),
+          )
+          .toNumber(),
       },
 
       producaoPorUsuario,
@@ -472,7 +528,6 @@ export class FinanceiroService {
       vendas,
     };
   }
-
   ////////////////////////////////////////////////////////////
   // PDF RELATÓRIO PRODUÇÃO
   ////////////////////////////////////////////////////////////
@@ -480,8 +535,9 @@ export class FinanceiroService {
   async gerarRelatorioProducaoPdf(
     filtros: RelatorioProducaoDto,
     res: Response,
+    emissor?: string,
   ) {
-    const dados = await this.obterDadosRelatorioProducao(filtros);
+    const dados = await this.obterDadosRelatorioProducao(filtros, emissor);
 
     const pdfBuffer = await gerarRelatorioProducaoPdf(dados);
 

@@ -1,4 +1,14 @@
-import { IsDateString, IsEnum, IsOptional, IsString } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 import { StatusCompra } from '@prisma/client';
 
@@ -11,6 +21,10 @@ export class SearchCompraDto {
   @IsString()
   fornecedor?: string;
 
+  @IsOptional()
+  @IsUUID()
+  fornecedorId?: string;
+
   //////////////////////////////////////////////////
   // FAZENDA
   //////////////////////////////////////////////////
@@ -18,6 +32,10 @@ export class SearchCompraDto {
   @IsOptional()
   @IsString()
   fazenda?: string;
+
+  @IsOptional()
+  @IsUUID()
+  fazendaId?: string;
 
   //////////////////////////////////////////////////
   // PLACA
@@ -54,4 +72,17 @@ export class SearchCompraDto {
   @IsOptional()
   @IsDateString()
   dataFim?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
 }

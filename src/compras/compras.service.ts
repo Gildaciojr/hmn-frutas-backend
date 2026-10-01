@@ -9,6 +9,7 @@ import {
   Compra,
   ModeloCaminhao,
   Prisma,
+  StatusCompra,
   TipoDescontoCompra,
 } from '@prisma/client';
 
@@ -19,6 +20,38 @@ import { CreateCompraDto } from './dto/create-compra.dto';
 import { SearchCompraDto } from './dto/search-compra.dto';
 
 import { UpdateCompraDto } from './dto/update-compra.dto';
+import {
+  getOperationalDateRange,
+  parseOperationalDate,
+} from '../common/utils/report-period';
+
+type SearchCompraItem = Prisma.CompraGetPayload<{
+  include: {
+    cliente: true;
+    fornecedor: true;
+    fazendaFornecedor: true;
+    transacoes: true;
+  };
+}>;
+
+export interface ComprasReportSummary {
+  operacoes: number;
+  kgLiquido: number;
+  valorLiquido: number;
+  precoComercialMedioKg: number;
+  ticketMedioLiquido: number;
+}
+
+export interface ComprasReportResponse {
+  items: SearchCompraItem[];
+  summary: ComprasReportSummary;
+  pagination: {
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  };
+}
 
 @Injectable()
 export class ComprasService {
@@ -224,7 +257,7 @@ export class ComprasService {
 
           safra: data.safra,
 
-          dataCompra: new Date(data.dataCompra),
+          dataCompra: parseOperationalDate(data.dataCompra),
 
           modeloCaminhao: data.modeloCaminhao,
 
@@ -887,26 +920,18 @@ export class ComprasService {
   // SEARCH
   //////////////////////////////////////////////////
 
-  async search(filters: SearchCompraDto): Promise<
-    Prisma.CompraGetPayload<{
-      include: {
-        cliente: true;
-
-        fornecedor: true;
-
-        fazendaFornecedor: true;
-
-        transacoes: true;
-      };
-    }>[]
-  > {
+  async search(
+    filters: SearchCompraDto,
+  ): Promise<SearchCompraItem[] | ComprasReportResponse> {
     const where: Prisma.CompraWhereInput = {};
 
     //////////////////////////////////////////////////
     // FORNECEDOR
     //////////////////////////////////////////////////
 
-    if (filters.fornecedor?.trim()) {
+    if (filters.fornecedorId) {
+      where.fornecedorId = filters.fornecedorId;
+    } else if (filters.fornecedor?.trim()) {
       where.fornecedor = {
         nome: {
           contains: filters.fornecedor.trim(),
@@ -918,7 +943,9 @@ export class ComprasService {
     // FAZENDA
     //////////////////////////////////////////////////
 
-    if (filters.fazenda?.trim()) {
+    if (filters.fazendaId) {
+      where.fazendaFornecedorId = filters.fazendaId;
+    } else if (filters.fazenda?.trim()) {
       where.fazendaFornecedor = {
         nome: {
           contains: filters.fazenda.trim(),
@@ -950,49 +977,83 @@ export class ComprasService {
     // STATUS
     //////////////////////////////////////////////////
 
-    if (filters.status) {
-      where.status = filters.status;
-    }
+    where.status = filters.status ?? { not: StatusCompra.CANCELADA };
 
     //////////////////////////////////////////////////
     // PERÍODO
     //////////////////////////////////////////////////
 
     if (filters.dataInicio || filters.dataFim) {
-      where.dataCompra = {};
-
-      if (filters.dataInicio) {
-        where.dataCompra.gte = new Date(filters.dataInicio);
-      }
-
-      if (filters.dataFim) {
-        const dataFim = new Date(filters.dataFim);
-
-        dataFim.setHours(23, 59, 59, 999);
-
-        where.dataCompra.lte = dataFim;
-      }
+      where.dataCompra = getOperationalDateRange(
+        filters.dataInicio,
+        filters.dataFim,
+      );
     }
 
-    return this.prisma.compra.findMany({
-      where,
+    const include = {
+      cliente: true,
+      fornecedor: true,
+      fazendaFornecedor: true,
+      transacoes: true,
+    } satisfies Prisma.CompraInclude;
+    const orderBy: Prisma.CompraOrderByWithRelationInput[] = [
+      { dataCompra: 'desc' },
+      { id: 'desc' },
+    ];
 
-      include: {
-        cliente: true,
+    // Preserve the array contract for callers that do not request pagination.
+    if (filters.page === undefined && filters.pageSize === undefined) {
+      return this.prisma.compra.findMany({ where, include, orderBy });
+    }
 
-        fornecedor: true,
-
-        fazendaFornecedor: true,
-
-        transacoes: true,
+    const page = filters.page ?? 1;
+    const pageSize = filters.pageSize ?? 25;
+    return this.prisma.$transaction(
+      async (tx) => {
+        const [items, metrics] = await Promise.all([
+          tx.compra.findMany({
+            where,
+            include,
+            orderBy,
+            skip: (page - 1) * pageSize,
+            take: pageSize,
+          }),
+          tx.compra.findMany({
+            where,
+            select: { kgLiquido: true, precoKg: true, valorTotal: true },
+          }),
+        ]);
+        let kg = new Prisma.Decimal(0);
+        let valor = new Prisma.Decimal(0);
+        let comercial = new Prisma.Decimal(0);
+        for (const item of metrics) {
+          kg = kg.add(item.kgLiquido);
+          valor = valor.add(item.valorTotal);
+          comercial = comercial.add(
+            new Prisma.Decimal(item.kgLiquido).mul(item.precoKg),
+          );
+        }
+        const total = metrics.length;
+        return {
+          items,
+          summary: {
+            operacoes: total,
+            kgLiquido: kg.toNumber(),
+            valorLiquido: valor.toNumber(),
+            precoComercialMedioKg: kg.gt(0) ? comercial.div(kg).toNumber() : 0,
+            ticketMedioLiquido: total > 0 ? valor.div(total).toNumber() : 0,
+          },
+          pagination: {
+            total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize),
+          },
+        };
       },
-
-      orderBy: {
-        dataCompra: 'desc',
-      },
-    });
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
   }
-
   //////////////////////////////////////////////////
   // VALIDAR
   //////////////////////////////////////////////////

@@ -85,6 +85,8 @@ interface RelatorioProducaoVenda {
 }
 
 interface RelatorioProducaoData {
+  usuarioSelecionado?: string;
+  emissor?: string;
   periodo: {
     dataInicio: Date | string;
     dataFim: Date | string;
@@ -136,9 +138,9 @@ function money(value: unknown): string {
 }
 
 function numberBRInteger(value: unknown): string {
-  return Math.trunc(toNumber(value)).toLocaleString('pt-BR', {
+  return toNumber(value).toLocaleString('pt-BR', {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 3,
   });
 }
 
@@ -149,7 +151,7 @@ function formatDate(date?: Date | string | null): string {
 
   return new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
-    timeZone: 'America/Sao_Paulo',
+    timeZone: 'UTC',
   }).format(new Date(date));
 }
 
@@ -370,13 +372,17 @@ function buildProducaoRelatorioTemplate(
                 },
 
                 {
-                  text: data.filtros.usuarioId
-                    ? 'Filtro de usuário aplicado'
-                    : 'Todos os usuários',
+                  text: `Usuário: ${data.usuarioSelecionado ?? 'Todos'}`,
                   alignment: 'center',
                   fontSize: 8.5,
                   color: COLORS.muted,
                   margin: [0, 4, 0, 0],
+                },
+                {
+                  text: `Emitido por: ${data.emissor ?? 'Não identificado'}`,
+                  alignment: 'center',
+                  fontSize: 8.5,
+                  color: COLORS.muted,
                 },
               ],
             },

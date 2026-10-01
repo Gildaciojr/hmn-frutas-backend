@@ -5,6 +5,7 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,8 @@ import { RegistrarPagamentoDto } from './dto/registrar-pagamento.dto';
 import { RelatorioProducaoDto } from './dto/relatorio-producao.dto';
 
 import type { Response } from 'express';
+import type { Request } from 'express';
+import type { JwtPayload } from '../auth/auth.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('financeiro')
@@ -47,6 +50,17 @@ export class FinanceiroController {
   // RELATÓRIO PRODUÇÃO PDF
   ////////////////////////////////////////////////////////////
 
+  @Get('producao')
+  producao(
+    @Query() filtros: RelatorioProducaoDto,
+    @Req() request: Request & { user: JwtPayload },
+  ) {
+    return this.financeiroService.obterDadosRelatorioProducao(
+      filtros,
+      request.user.nome,
+    );
+  }
+
   @Get('producao/pdf')
   gerarRelatorioProducao(
     @Query()
@@ -54,8 +68,14 @@ export class FinanceiroController {
 
     @Res()
     res: Response,
+    @Req()
+    request: Request & { user: JwtPayload },
   ) {
-    return this.financeiroService.gerarRelatorioProducaoPdf(filtros, res);
+    return this.financeiroService.gerarRelatorioProducaoPdf(
+      filtros,
+      res,
+      request.user.nome,
+    );
   }
 
   ////////////////////////////////////////////////////////////

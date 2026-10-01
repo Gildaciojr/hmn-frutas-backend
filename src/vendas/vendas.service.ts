@@ -18,6 +18,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateVendaDto } from './dto/create-venda.dto';
 
 import { UpdateVendaDto } from './dto/update-venda.dto';
+import {
+  getBusinessTodayYmd,
+  parseOperationalDate,
+} from '../common/utils/report-period';
 
 @Injectable()
 export class VendasService {
@@ -349,7 +353,9 @@ export class VendasService {
             // IDENTIFICAÇÃO
             ////////////////////////////////////////////////////
 
-            dataVenda: data.dataVenda ? new Date(data.dataVenda) : new Date(),
+            dataVenda: parseOperationalDate(
+              data.dataVenda ?? getBusinessTodayYmd(),
+            ),
 
             numeroPedido,
 
