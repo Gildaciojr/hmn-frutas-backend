@@ -25,15 +25,124 @@ import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateVendaDto } from './dto/create-venda.dto';
 
+import { SearchVendaDto } from './dto/search-venda.dto';
 import { UpdateVendaDto } from './dto/update-venda.dto';
 import {
   getBusinessTodayYmd,
+  getOperationalDateRange,
   parseOperationalDate,
 } from '../common/utils/report-period';
 
 @Injectable()
 export class VendasService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async search(filters: SearchVendaDto) {
+    const page = filters.page ?? 1;
+    const pageSize = filters.pageSize ?? 25;
+    if (
+      !Number.isSafeInteger(page) ||
+      page < 1 ||
+      !Number.isSafeInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100 ||
+      !Number.isSafeInteger((page - 1) * pageSize)
+    ) {
+      throw new BadRequestException('Página e tamanho de página inválidos');
+    }
+    const where: Prisma.VendaWhereInput = {
+      status: filters.status ?? { not: StatusVenda.CANCELADA },
+    };
+    if (filters.clienteId) where.clienteId = filters.clienteId;
+    else if (filters.cliente?.trim()) {
+      const nome = {
+        contains: filters.cliente.trim(),
+        mode: Prisma.QueryMode.insensitive,
+      };
+      where.OR = [{ cliente: { nome } }, { clienteNomeSnapshot: nome }];
+    }
+    for (const field of ['placa', 'numeroPedido', 'numeroRomaneio'] as const) {
+      const value = filters[field]?.trim();
+      if (value)
+        where[field] = { contains: value, mode: Prisma.QueryMode.insensitive };
+    }
+    if (filters.statusPagamento)
+      where.statusPagamento = filters.statusPagamento;
+    if (filters.dataInicio || filters.dataFim) {
+      where.dataVenda = getOperationalDateRange(
+        filters.dataInicio,
+        filters.dataFim,
+      );
+    }
+    return this.prisma.$transaction(
+      async (tx) => {
+        const [items, metrics, prices] = await Promise.all([
+          tx.venda.findMany({
+            where,
+            select: {
+              id: true,
+              clienteId: true,
+              clienteNomeSnapshot: true,
+              cliente: { select: { id: true, nome: true } },
+              dataVenda: true,
+              numeroPedido: true,
+              numeroRomaneio: true,
+              placa: true,
+              pesoLiquido: true,
+              valorPorKg: true,
+              valorMelancia: true,
+              valorTotal: true,
+              status: true,
+              statusPagamento: true,
+            },
+            orderBy: [{ dataVenda: 'desc' }, { id: 'desc' }],
+            skip: (page - 1) * pageSize,
+            take: pageSize,
+          }),
+          tx.venda.aggregate({
+            where,
+            _count: { _all: true },
+            _sum: { pesoLiquido: true, valorTotal: true },
+          }),
+          tx.venda.groupBy({
+            by: ['valorPorKg'],
+            where,
+            _sum: { pesoLiquido: true },
+          }),
+        ]);
+        const total = metrics._count._all;
+        const kg = new Prisma.Decimal(metrics._sum.pesoLiquido ?? 0);
+        const valor = new Prisma.Decimal(metrics._sum.valorTotal ?? 0);
+        const comercial = prices.reduce(
+          (sum, group) =>
+            sum.add(
+              new Prisma.Decimal(group._sum.pesoLiquido ?? 0).mul(
+                group.valorPorKg,
+              ),
+            ),
+          new Prisma.Decimal(0),
+        );
+        // valorPorKg materializes precoMelancia; aggregate weights by commercial price.
+        return {
+          items,
+          summary: {
+            operacoes: total,
+            kgLiquidoVendido: kg.toNumber(),
+            valorLiquidoVendido: valor.toNumber(),
+            precoComercialMedioKg: kg.gt(0) ? comercial.div(kg).toNumber() : 0,
+            ticketMedioLiquido: total > 0 ? valor.div(total).toNumber() : 0,
+          },
+          pagination: {
+            total,
+            page,
+            pageSize,
+            totalPages: Math.ceil(total / pageSize),
+          },
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
 
   ////////////////////////////////////////////////////////////
   // CREATE

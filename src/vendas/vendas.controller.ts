@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -18,6 +19,8 @@ import type { Request } from 'express';
 import { VendasService } from './vendas.service';
 
 import { CreateVendaDto } from './dto/create-venda.dto';
+
+import { SearchVendaDto } from './dto/search-venda.dto';
 
 import { UpdateVendaDto } from './dto/update-venda.dto';
 
@@ -58,6 +61,11 @@ export class VendasController {
   ////////////////////////////////////////////////////////////
   // FIND BY CLIENTE
   ////////////////////////////////////////////////////////////
+
+  @Get('search')
+  search(@Query() filters: SearchVendaDto) {
+    return this.vendasService.search(filters);
+  }
 
   @Get('cliente/:id')
   findByCliente(
