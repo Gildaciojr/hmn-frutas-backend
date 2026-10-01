@@ -10,12 +10,29 @@ import {
   Venda,
 } from '@prisma/client';
 
+import PdfPrinter from 'pdfmake';
+import type { TDocumentDefinitions } from 'pdfmake/interfaces';
+import {
+  buildClienteRelatorioTemplate,
+  type ClienteRelatorioData,
+} from './templates/cliente-relatorio.template';
+
 import { summarizeTitles } from '../financeiro/financial-state';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateClienteDto } from './dto/create-cliente.dto';
 
 import { UpdateClienteDto } from './dto/update-cliente.dto';
+
+const PdfPrinterClass = PdfPrinter as unknown as {
+  new (fonts: Record<string, unknown>): {
+    createPdfKitDocument: (
+      docDefinition: TDocumentDefinitions,
+    ) => NodeJS.ReadableStream & {
+      end(): void;
+    };
+  };
+};
 
 @Injectable()
 export class ClientesService {
@@ -528,6 +545,86 @@ export class ClientesService {
         totalFrutasVendidas,
       },
     };
+  }
+
+  async relatorioCompleto(clienteId: string): Promise<ClienteRelatorioData> {
+    const history = await this.historicoCompleto(clienteId);
+    const pagamentos = history.pagamentos.filter(
+      (event) => event.transacao.tipo === TipoTransacao.ENTRADA,
+    );
+    return {
+      cliente: history.cliente,
+      resumo: {
+        quantidadeVendas: history.resumo.quantidadeOperacoes,
+        kgLiquidoVendido: history.resumo.totalKgVendido,
+        totalVendido: history.resumo.totalVendas,
+        totalRecebido: history.resumo.totalRecebido,
+        totalAReceber: history.resumo.totalAReceber,
+        totalVencido: history.resumo.totalVencido,
+        ultimaVenda: history.resumo.ultimaVenda,
+        ultimoPagamento: history.resumo.ultimoPagamento,
+      },
+      operacoes: history.vendas.map((venda) => ({
+        id: venda.id,
+        dataVenda: venda.dataVenda,
+        numeroPedido: venda.numeroPedido,
+        numeroRomaneio: venda.numeroRomaneio,
+        placa: venda.placa,
+        pesoLiquido: venda.pesoLiquido,
+        valorPorKg: Number(venda.valorPorKg),
+        valorTotal: Number(venda.valorTotal),
+        status: venda.status,
+        statusPagamento: venda.statusPagamento,
+      })),
+      financeiro: {
+        titulos: history.transacoes
+          .filter((title) => title.tipo === TipoTransacao.ENTRADA)
+          .map((title) => ({
+            id: title.id,
+            descricao: title.descricao,
+            referencia: title.referencia,
+            valor: Number(title.valor),
+            valorPago: Number(title.valorPago ?? 0),
+            valorRestante: Number(title.valorRestante ?? 0),
+            statusFinanceiro: title.statusFinanceiro,
+            vencimento: title.vencimento,
+            pagamentos: pagamentos
+              .filter((event) => event.transacaoId === title.id)
+              .map((event) => ({
+                id: event.id,
+                valor: Number(event.valor),
+                pagoEm: event.pagoEm,
+                formaPagamento: event.formaPagamento,
+                observacoes: event.observacoes,
+              })),
+          })),
+      },
+    };
+  }
+
+  async gerarPdfCliente(
+    clienteId: string,
+    usuarioNome: string,
+  ): Promise<Buffer> {
+    const report = await this.relatorioCompleto(clienteId);
+    const printer = new PdfPrinterClass({
+      Roboto: {
+        normal: 'Helvetica',
+        bold: 'Helvetica-Bold',
+        italics: 'Helvetica-Oblique',
+        bolditalics: 'Helvetica-BoldOblique',
+      },
+    });
+    const document = printer.createPdfKitDocument(
+      buildClienteRelatorioTemplate(report, usuarioNome),
+    );
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      document.on('data', (chunk: Buffer) => chunks.push(chunk));
+      document.on('end', () => resolve(Buffer.concat(chunks)));
+      document.on('error', reject);
+      document.end();
+    });
   }
 
   ////////////////////////////////////////////////////////////

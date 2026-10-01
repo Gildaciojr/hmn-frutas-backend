@@ -2,11 +2,17 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Post,
   Param,
   Patch,
   UseGuards,
+  Req,
+  Res,
 } from '@nestjs/common';
+
+import type { Request, Response } from 'express';
+import type { JwtPayload } from '../auth/auth.service';
 
 import { ClientesService } from './clientes.service';
 
@@ -60,6 +66,28 @@ export class ClientesController {
   ////////////////////////////////////////////////////////////
   // HISTÓRICO FINANCEIRO
   ////////////////////////////////////////////////////////////
+
+  @Get(':id/relatorio')
+  @Header('Cache-Control', 'private, no-store')
+  relatorioCompleto(@Param('id') id: string) {
+    return this.service.relatorioCompleto(id);
+  }
+
+  @Get(':id/relatorio-pdf')
+  async gerarPdfCliente(
+    @Param('id') id: string,
+    @Req() request: Request & { user: JwtPayload },
+    @Res() response: Response,
+  ): Promise<void> {
+    const buffer = await this.service.gerarPdfCliente(id, request.user.nome);
+    response.set({
+      'Content-Type': 'application/pdf',
+      'Cache-Control': 'private, no-store',
+      'Content-Disposition': `inline; filename=HMN-CLIENTE-${id}.pdf`,
+      'Content-Length': buffer.length,
+    });
+    response.end(buffer);
+  }
 
   @Get(':id/historico')
   historicoCompleto(

@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -26,7 +27,7 @@ const COLORS = {
 export interface FornecedorRelatorioPagamento {
   id: string;
 
-  valor: number;
+  valor: number | Prisma.Decimal;
 
   formaPagamento: string;
 
@@ -93,6 +94,11 @@ export interface FornecedorRelatorioData {
   };
 
   resumo: {
+    kgComprado: number;
+    totalAPagar: number;
+    totalVencido: number;
+    ultimaCompra: { dataCompra: Date | string } | null;
+    ultimoPagamento: { pagoEm: Date | string } | null;
     totalComprado: number;
 
     totalPago: number;
@@ -112,6 +118,19 @@ export interface FornecedorRelatorioData {
     limiteFinanceiroDias: number;
   };
 
+  financeiro: {
+    titulos: {
+      id: string;
+      referencia: string | null;
+      descricao: string | null;
+      valor: Prisma.Decimal;
+      valorPago: Prisma.Decimal | null;
+      valorRestante: Prisma.Decimal | null;
+      statusFinanceiro: string;
+      vencimento: Date | string | null;
+    }[];
+  };
+  pagamentos: FornecedorRelatorioPagamento[];
   historicoOperacional: FornecedorRelatorioItem[];
 }
 
@@ -160,6 +179,12 @@ function numberBRInteger(value: unknown): string {
   });
 }
 
+function formatCivilDate(date?: Date | string | null): string {
+  if (!date) return '-';
+  const ymd = (date instanceof Date ? date.toISOString() : date).slice(0, 10);
+  return `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}/${ymd.slice(0, 4)}`;
+}
+
 function formatDate(date?: Date | string | null): string {
   if (!date) {
     return '-';
@@ -167,6 +192,8 @@ function formatDate(date?: Date | string | null): string {
 
   return new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'America/Sao_Paulo',
   }).format(new Date(date));
 }
 
@@ -447,7 +474,7 @@ export function buildFornecedorRelatorioTemplate(
 
     {
       table: {
-        widths: ['33.3%', '33.3%', '33.3%'],
+        widths: ['*', '*', '*'],
 
         body: [
           [
@@ -496,7 +523,7 @@ export function buildFornecedorRelatorioTemplate(
                 cardTitle('A PAGAR'),
 
                 {
-                  text: money(data.resumo.saldoDevedor),
+                  text: money(data.resumo.totalAPagar),
 
                   bold: true,
 
@@ -528,7 +555,19 @@ export function buildFornecedorRelatorioTemplate(
     //////////////////////////////////////////////////////////
 
     {
+      text: `Vencido: ${money(data.resumo.totalVencido)} | Compras: ${data.resumo.quantidadeCompras} | Kg líquido comprado: ${numberBR(data.resumo.kgComprado)}`,
+      bold: true,
+      color: COLORS.primary,
+      margin: [0, 0, 0, 6],
+    },
+    {
+      text: `Última compra: ${formatCivilDate(data.resumo.ultimaCompra?.dataCompra)} | Último pagamento: ${formatDate(data.resumo.ultimoPagamento?.pagoEm)}`,
+      margin: [0, 0, 0, 12],
+    },
+
+    {
       text: 'EXTRATO OPERACIONAL',
+      headlineLevel: 1,
 
       fontSize: 14,
 
@@ -577,7 +616,7 @@ export function buildFornecedorRelatorioTemplate(
           ],
 
           ...data.historicoOperacional.map((item) => [
-            tableCell(formatDate(item.dataCompra), 'center'),
+            tableCell(formatCivilDate(item.dataCompra), 'center'),
 
             tableCell(item.numeroFolha ?? '-', 'center'),
 
@@ -624,26 +663,68 @@ export function buildFornecedorRelatorioTemplate(
     //////////////////////////////////////////////////////////
 
     {
-      text: 'PAGAMENTOS CONSOLIDADOS',
-
+      text: 'FINANCEIRO - TÍTULOS DE SAÍDA',
+      headlineLevel: 1,
       fontSize: 14,
-
       bold: true,
-
       color: COLORS.primary,
-
       margin: [0, 8, 0, 10],
+    },
+    {
+      table: {
+        headerRows: 1,
+        widths: ['*', 80, 95, 95, 95, 80],
+        body: [
+          [
+            'REFERÊNCIA',
+            'VENCIMENTO',
+            'NOMINAL',
+            'PAGO',
+            'RESTANTE',
+            'STATUS',
+          ].map((text) => tableHeader(text)),
+          ...data.financeiro.titulos.map((title) => [
+            tableCell(title.referencia || title.descricao || '-'),
+            tableCell(formatCivilDate(title.vencimento), 'center'),
+            tableCell(money(title.valor), 'right'),
+            tableCell(money(title.valorPago), 'right'),
+            tableCell(money(title.valorRestante), 'right'),
+            tableCell(title.statusFinanceiro, 'center'),
+          ]),
+        ],
+      },
+      layout: {
+        hLineWidth: () => 0.5,
+        vLineWidth: () => 0,
+        hLineColor: () => COLORS.primaryBorder,
+      },
+      margin: [0, 0, 0, 16],
     },
 
     {
       table: {
-        headerRows: 1,
+        headerRows: 2,
+        keepWithHeaderRows: data.pagamentos.length ? 1 : 0,
 
-        widths: [70, 80, 90, '*'],
+        widths: [100, 80, 90, '*'],
 
         body: [
           [
-            tableHeader('DATA'),
+            {
+              text: 'PAGAMENTOS CONSOLIDADOS',
+              colSpan: 4,
+              fontSize: 14,
+              bold: true,
+              color: COLORS.primary,
+              border: [false, false, false, false],
+              margin: [0, 8, 0, 10],
+            },
+            {},
+            {},
+            {},
+          ],
+          [
+            tableHeader('DATA/HORA (SP)'),
 
             tableHeader('FORMA'),
 
@@ -652,20 +733,12 @@ export function buildFornecedorRelatorioTemplate(
             tableHeader('OBSERVAÇÃO'),
           ],
 
-          ...data.historicoOperacional.flatMap((item) =>
-            item.pagamentos.map((pagamento) => [
-              tableCell(
-                formatDate(pagamento.pagoEm ?? pagamento.createdAt),
-                'center',
-              ),
-
-              tableCell(pagamento.formaPagamento ?? '-', 'center'),
-
-              tableCell(money(pagamento.valor), 'right'),
-
-              tableCell(pagamento.observacoes ?? '-'),
-            ]),
-          ),
+          ...data.pagamentos.map((pagamento) => [
+            tableCell(formatDate(pagamento.pagoEm), 'center'),
+            tableCell(pagamento.formaPagamento, 'center'),
+            tableCell(money(pagamento.valor), 'right'),
+            tableCell(pagamento.observacoes ?? '-'),
+          ]),
         ],
       },
 
@@ -817,6 +890,17 @@ export function buildFornecedorRelatorioTemplate(
   ];
 
   return {
+    footer: (page, pages) => ({
+      text: `HMN Frutas | Página ${page} de ${pages}`,
+      alignment: 'right',
+      fontSize: 8,
+      color: COLORS.muted,
+      margin: [20, 5, 20, 0],
+    }),
+    pageBreakBefore: (node, following: unknown) =>
+      node.headlineLevel === 1 &&
+      Array.isArray(following) &&
+      following.length === 0,
     pageSize: 'A4',
 
     pageOrientation: 'landscape',

@@ -293,38 +293,28 @@ export class FornecedoresService {
       },
     });
 
-    const totalComprado = compras.reduce((acc, compra) => {
-      return acc + Number(compra.valorTotal ?? 0);
-    }, 0);
-
-    const totalKg = compras.reduce((acc, compra) => {
-      return acc + Number(compra.kgBruto ?? 0);
-    }, 0);
-
     const totalFrutas = compras.reduce((acc, compra) => {
       return acc + Number(compra.quantidadeFrutas ?? 0);
     }, 0);
 
-    const ultimaCompra = compras.length > 0 ? compras[0] : null;
-
     const history = await this.historicoCompleto(fornecedorId);
     return {
-      fornecedor,
+      fornecedor: history.fornecedor,
 
       resumo: {
         totalPago: history.resumo.totalPago,
         totalAPagar: history.resumo.totalAPagar,
         totalVencido: history.resumo.totalVencido,
         ultimoPagamento: history.resumo.ultimoPagamento,
-        totalCompras: compras.length,
+        totalCompras: history.resumo.quantidadeCompras,
 
-        totalComprado,
+        totalComprado: history.resumo.totalComprado,
 
-        totalKg,
+        totalKg: history.resumo.kgComprado,
 
         totalFrutas,
 
-        ultimaCompra,
+        ultimaCompra: history.resumo.ultimaCompra,
 
         quantidadeFazendas: fornecedor.fazendas.length,
 
@@ -336,7 +326,7 @@ export class FornecedoresService {
           .length,
       },
 
-      compras,
+      compras: history.compras,
     };
   }
 
@@ -618,6 +608,7 @@ export class FornecedoresService {
         percentualLimite,
 
         quantidadeCompras: compras.length,
+        kgComprado: compras.reduce((sum, compra) => sum + compra.kgLiquido, 0),
 
         quantidadePagamentos: pagamentos.length,
 
@@ -634,6 +625,13 @@ export class FornecedoresService {
 
       transacoes,
 
+      pagamentos,
+      financeiro: {
+        titulos: transacoes.filter(
+          (title) => title.tipo === TipoTransacao.SAIDA,
+        ),
+        pagamentos,
+      },
       historicoOperacional,
     };
   }

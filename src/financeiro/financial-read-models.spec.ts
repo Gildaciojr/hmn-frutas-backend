@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { buildClienteRelatorioTemplate } from '../clientes/templates/cliente-relatorio.template';
+
 import { Test } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
@@ -51,6 +55,11 @@ const purchases = [
 const sales = [
   {
     id: 'sale-new',
+    numeroPedido: '001',
+    numeroRomaneio: '001',
+    placa: 'ABC1D23',
+    valorPorKg: d(2),
+    statusPagamento: 'PARCIAL',
     status: 'ABERTA',
     dataVenda: newer,
     valorTotal: d(120),
@@ -60,6 +69,11 @@ const sales = [
   },
   {
     id: 'sale-old',
+    numeroPedido: '002',
+    numeroRomaneio: '002',
+    placa: 'ABC1D23',
+    valorPorKg: d(2),
+    statusPagamento: 'PARCIAL',
     status: 'ABERTA',
     dataVenda: older,
     valorTotal: d(80),
@@ -228,7 +242,13 @@ describe('customer, supplier and financial read models', () => {
         Promise.resolve(
           titles
             .filter((item) => item.tipo === 'ENTRADA')
-            .flatMap((item) => item.pagamentos),
+            .flatMap((item) =>
+              item.pagamentos.map((event) => ({
+                ...event,
+                transacaoId: item.id,
+                transacao: item,
+              })),
+            ),
         ),
       ),
     },
@@ -268,6 +288,99 @@ describe('customer, supplier and financial read models', () => {
       }),
     );
   });
+  it('client JSON and PDF reuse the canonical history and only expose incoming titles/events', async () => {
+    jest.useFakeTimers({
+      doNotFake: ['nextTick', 'setImmediate', 'setTimeout'],
+    });
+    jest.setSystemTime(new Date('2026-10-02T12:00:00Z'));
+    try {
+      const report = await clientes.relatorioCompleto('client');
+      expect(report.resumo).toMatchObject({
+        quantidadeVendas: 2,
+        kgLiquidoVendido: 150,
+        totalVendido: 200,
+        totalRecebido: 70,
+        totalAReceber: 130,
+        totalVencido: 130,
+        ultimaVenda: newer,
+        ultimoPagamento: new Date('2026-10-03T11:00:00Z'),
+      });
+      expect(report.operacoes.map((item) => item.id)).toEqual([
+        'sale-new',
+        'sale-old',
+      ]);
+      expect(
+        report.financeiro.titulos.every((item) => !item.id.startsWith('out-')),
+      ).toBe(true);
+      expect(
+        report.financeiro.titulos
+          .flatMap((item) => item.pagamentos)
+          .reduce((sum, event) => sum + event.valor, 0),
+      ).toBe(70);
+      const definition = buildClienteRelatorioTemplate(report, 'Emissor');
+      expect(JSON.stringify(definition)).toContain('130,00');
+      const source = jest.spyOn(clientes, 'relatorioCompleto');
+      const buffer = await clientes.gerarPdfCliente('client', 'Emissor');
+      expect(source).toHaveBeenCalledWith('client');
+      expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
+      source.mockRestore();
+      if (process.env.PATCH4B_PDF_DIR) {
+        fs.mkdirSync(process.env.PATCH4B_PDF_DIR, { recursive: true });
+        fs.writeFileSync(
+          path.join(process.env.PATCH4B_PDF_DIR, 'cliente.pdf'),
+          buffer,
+        );
+      }
+      expect(writes).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+  it('supplier JSON and PDF use all outgoing titles/payments and official dates/weight', async () => {
+    jest.useFakeTimers({
+      doNotFake: ['nextTick', 'setImmediate', 'setTimeout'],
+    });
+    jest.setSystemTime(new Date('2026-10-02T12:00:00Z'));
+    try {
+      const report = await fornecedores.historicoCompleto('supplier');
+      expect(report.resumo).toMatchObject({
+        quantidadeCompras: 2,
+        kgComprado: 150,
+        totalComprado: 150,
+        totalPago: 45,
+        totalAPagar: 105,
+        totalVencido: 105,
+      });
+      expect(report.resumo.ultimaCompra?.dataCompra).toEqual(newer);
+      expect(report.resumo.ultimoPagamento?.pagoEm).toEqual(
+        new Date('2026-10-04T10:00:00Z'),
+      );
+      expect(
+        report.financeiro.titulos.every((title) => title.tipo === 'SAIDA'),
+      ).toBe(true);
+      expect(
+        report.pagamentos.reduce((sum, event) => sum + Number(event.valor), 0),
+      ).toBe(45);
+      const source = jest.spyOn(fornecedores, 'historicoCompleto');
+      const buffer = await fornecedores.gerarPdfFornecedor(
+        'supplier',
+        'Emissor',
+      );
+      expect(source).toHaveBeenCalledWith('supplier');
+      expect(buffer.subarray(0, 5).toString()).toBe('%PDF-');
+      source.mockRestore();
+      if (process.env.PATCH4B_PDF_DIR) {
+        fs.mkdirSync(process.env.PATCH4B_PDF_DIR, { recursive: true });
+        fs.writeFileSync(
+          path.join(process.env.PATCH4B_PDF_DIR, 'fornecedor.pdf'),
+          buffer,
+        );
+      }
+      expect(writes).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
   it('customer complete/list summaries keep the same financial source', async () => {
     const complete = await clientes.resumoCompleto('client');
     const list = await clientes.resumoLista();
@@ -295,6 +408,29 @@ describe('customer, supplier and financial read models', () => {
     expect(JSON.stringify(pdf)).toContain('150,00');
     expect(JSON.stringify(pdf)).toContain('105,00');
     expect(writes).not.toHaveBeenCalled();
+  });
+  it('supplier PDF includes outgoing payments without a valid linked purchase', async () => {
+    prisma.transacao.findMany.mockResolvedValueOnce([
+      ...titles,
+      title(
+        'out-manual',
+        'SAIDA',
+        20,
+        5,
+        null,
+        new Date('2026-10-05T10:00:00Z'),
+      ),
+    ]);
+    const report = await fornecedores.historicoCompleto('supplier');
+    expect(report.resumo.totalPago).toBe(50);
+    expect(report.resumo.totalAPagar).toBe(120);
+    expect(report.resumo.totalComprado).toBe(150);
+    expect(report.pagamentos.some((event) => event.id === 'e-out-manual')).toBe(
+      true,
+    );
+    const definition = buildFornecedorRelatorioTemplate(report, 'Emissor');
+    expect(JSON.stringify(definition)).toContain('5,00');
+    expect(JSON.stringify(definition)).toContain('120,00');
   });
   it('supplier summary and finance GET are read-only and use events/open titles', async () => {
     const summary = await fornecedores.resumoCompleto('supplier');
