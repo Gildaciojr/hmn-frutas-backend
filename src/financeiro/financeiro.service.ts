@@ -487,6 +487,7 @@ export class FinanceiroService {
 
     res.set({
       'Content-Type': 'application/pdf',
+      'Cache-Control': 'private, no-store',
 
       'Content-Disposition': `attachment; filename=relatorio-producao.pdf`,
 

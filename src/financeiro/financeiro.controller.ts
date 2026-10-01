@@ -1,6 +1,16 @@
-import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 
 import { FinanceiroService } from './financeiro.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 import { CreateTransacaoDto } from './dto/create-transacao.dto';
 
@@ -10,6 +20,7 @@ import { RelatorioProducaoDto } from './dto/relatorio-producao.dto';
 
 import type { Response } from 'express';
 
+@UseGuards(JwtAuthGuard)
 @Controller('financeiro')
 export class FinanceiroController {
   constructor(private readonly financeiroService: FinanceiroService) {}

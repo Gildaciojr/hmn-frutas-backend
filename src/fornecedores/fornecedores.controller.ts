@@ -125,6 +125,7 @@ export class FornecedoresController {
 
     response.set({
       'Content-Type': 'application/pdf',
+      'Cache-Control': 'private, no-store',
 
       'Content-Disposition': `inline; filename=HMN-FORNECEDOR-${id}.pdf`,
 
