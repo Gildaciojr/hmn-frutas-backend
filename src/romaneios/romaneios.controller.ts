@@ -1,9 +1,11 @@
-import { Controller, Get, Param, Res } from '@nestjs/common';
+import { Controller, Get, Param, Res, UseGuards } from '@nestjs/common';
 
 import type { Response } from 'express';
 
 import { RomaneiosService } from './romaneios.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller('romaneios')
 export class RomaneiosController {
   constructor(private readonly romaneiosService: RomaneiosService) {}
@@ -24,6 +26,7 @@ export class RomaneiosController {
 
     response.set({
       'Content-Type': 'application/pdf',
+      'Cache-Control': 'private, no-store',
 
       //////////////////////////////////////////////////////////
       // NOME ARQUIVO
@@ -57,6 +60,7 @@ export class RomaneiosController {
 
     response.set({
       'Content-Type': 'application/pdf',
+      'Cache-Control': 'private, no-store',
 
       'Content-Disposition': `inline; filename=HMN-ROMANEIO-COMPRA-${id}.pdf`,
 
